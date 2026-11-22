@@ -171,9 +171,8 @@ fun PlayerScreen(
                         }
                         drag = 0f
                     },
-                    onDrag = { change, amount ->
+                    onVerticalDrag = { _, amount ->
                         drag += amount
-                        change.consume()
                     }
                 )
             }
