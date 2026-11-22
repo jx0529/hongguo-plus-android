@@ -1,0 +1,94 @@
+// SPDX-License-Identifier: GPL-3.0-only
+package com.jx.hongguoplus
+
+import android.content.Context
+import com.hongguotv.core.AccountCredentials
+import com.hongguotv.core.CloudAccountClient
+import com.hongguotv.core.CloudFavorite
+import com.hongguotv.core.CloudProgress
+import com.hongguotv.core.CloudProfile
+import com.hongguotv.core.PhoneLogin
+
+/** 登录态与云端数据：凭证只保存在本机 SharedPreferences，不上传任何第三方。 */
+class AccountStore(context: Context) {
+
+    private val prefs = context.getSharedPreferences("hongguoplus_account", Context.MODE_PRIVATE)
+
+    fun credentials(): AccountCredentials? {
+        val raw = prefs.getString(KEY_CREDENTIALS, null) ?: return null
+        return runCatching { AccountCredentials.fromJson(raw) }.getOrNull()
+    }
+
+    fun save(credentials: AccountCredentials) {
+        prefs.edit().putString(KEY_CREDENTIALS, credentials.toJson()).apply()
+    }
+
+    fun clear() {
+        prefs.edit().remove(KEY_CREDENTIALS).remove(KEY_NICKNAME).apply()
+    }
+
+    fun isLoggedIn(): Boolean = credentials() != null
+
+    var nickname: String
+        get() = prefs.getString(KEY_NICKNAME, "").orEmpty()
+        private set(value) = prefs.edit().putString(KEY_NICKNAME, value).apply()
+
+    fun newLogin(): PhoneLogin = PhoneLogin(Graph.http)
+
+    fun client(): CloudAccountClient = CloudAccountClient(Graph.http)
+
+    fun profile(credentials: AccountCredentials? = credentials()): CloudProfile {
+        if (credentials == null) return CloudProfile("", "")
+        return client().profile(credentials).also { nickname = it.nickname }
+    }
+
+    /** 云端观看记录，用于「没看完」列表。 */
+    fun progress(credentials: AccountCredentials? = credentials()): List<CloudProgress> {
+        if (credentials == null) return emptyList()
+        return client().history(credentials)
+    }
+
+    fun favorites(credentials: AccountCredentials? = credentials()): List<CloudFavorite> {
+        if (credentials == null) return emptyList()
+        return client().favorites(credentials)
+    }
+
+    fun uploadProgress(seriesId: String, episodeId: String, episodeIndex: Int, position: Long, duration: Long, episodeCount: Int) {
+        val credentials = credentials() ?: return
+        val progress = CloudProgress(
+            series = com.hongguotv.core.Series(seriesId, ""),
+            episodeId = episodeId,
+            episodeIndex = episodeIndex,
+            position = position,
+            duration = duration,
+            updatedAt = System.currentTimeMillis(),
+            episodeCount = episodeCount
+        )
+        runCatching { client().upload(credentials, progress, episodeCount) }
+    }
+
+    companion object {
+        private const val KEY_CREDENTIALS = "credentials"
+        private const val KEY_NICKNAME = "nickname"
+    }
+}
+
+/** 把云端进度合并进本地历史，并给出「没看完」的列表。 */
+data class UnfinishedItem(
+    val series: com.hongguotv.core.Series,
+    val episodeIndex: Int,
+    val episodeCount: Int,
+    val progressPercent: Int
+)
+
+fun mergeCloudProgress(items: List<CloudProgress>): List<UnfinishedItem> =
+    items.mapNotNull { item ->
+        if (item.series.id.isBlank() || item.duration <= 0L) return@mapNotNull null
+        val ratio = (item.position.toFloat() / item.duration.toFloat()).coerceIn(0f, 1f)
+        Graph.library.putHistory(
+            series = item.series,
+            episodeIndex = item.episodeIndex,
+            episodeCount = item.episodeCount
+        )
+        UnfinishedItem(item.series, item.episodeIndex, item.episodeCount, (ratio * 100).toInt())
+    }

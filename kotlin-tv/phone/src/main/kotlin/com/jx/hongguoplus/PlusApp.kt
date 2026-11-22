@@ -4,6 +4,7 @@ package com.jx.hongguoplus
 import android.app.Application
 import android.content.Context
 import com.hongguotv.core.ContentRepository
+import com.hongguotv.core.MemoryCookies
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
 
@@ -15,9 +16,13 @@ object Graph {
         private set
     lateinit var library: LibraryStore
         private set
+    lateinit var account: AccountStore
+        private set
 
     val http: OkHttpClient by lazy {
         OkHttpClient.Builder()
+            // 站点 CDN 会在重定向下发 ttwid，缺少 Cookie 的取流请求只会拿到空响应
+            .cookieJar(MemoryCookies())
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .callTimeout(45, TimeUnit.SECONDS)
@@ -31,6 +36,7 @@ object Graph {
             if (initialized) return
             repo = ContentRepository(http)
             library = LibraryStore(context.applicationContext)
+            account = AccountStore(context.applicationContext)
             initialized = true
         }
     }

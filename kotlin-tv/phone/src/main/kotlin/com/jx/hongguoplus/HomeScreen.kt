@@ -34,7 +34,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.hongguotv.core.CatalogPage
 import com.hongguotv.core.ContentType
+import com.hongguotv.core.RankBoard
 import com.hongguotv.core.Series
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -114,7 +116,7 @@ fun HomeScreen(onOpen: (Series) -> Unit) {
         error = null
         scope.launch {
             val result = withContext(Dispatchers.IO) {
-                runCatching { Graph.repo.home(1, types[index]) }
+                runCatching { hotCatalog(types[index], 1) }
             }
             result.onSuccess {
                 items = it.items
@@ -136,7 +138,7 @@ fun HomeScreen(onOpen: (Series) -> Unit) {
         loading = true
         scope.launch {
             val result = withContext(Dispatchers.IO) {
-                runCatching { Graph.repo.home(next, types[index]) }
+                runCatching { hotCatalog(types[index], next) }
             }
             result.onSuccess {
                 items = (items + it.items).distinctBy { s -> s.id }
@@ -189,4 +191,19 @@ fun HomeScreen(onOpen: (Series) -> Unit) {
             onLoadMore = { loadMore() }
         )
     }
+}
+
+
+/** 首页优先走推荐流；推荐为空或接口异常时退到榜单，保证一进来就有红果最火的内容。 */
+internal fun hotCatalog(type: ContentType, page: Int): CatalogPage {
+    val preferred = runCatching { Graph.repo.home(page, type) }.getOrNull()
+    if (preferred != null && preferred.items.isNotEmpty()) return preferred
+    val board = when (type) {
+        ContentType.COMIC -> RankBoard.COMIC
+        ContentType.AI -> RankBoard.AI
+        ContentType.SHORT -> RankBoard.REAL
+    }
+    val boardPage = runCatching { Graph.repo.ranking(board, page) }.getOrNull()
+    if (boardPage != null && boardPage.items.isNotEmpty()) return boardPage
+    return Graph.repo.ranking(RankBoard.TOTAL, page)
 }

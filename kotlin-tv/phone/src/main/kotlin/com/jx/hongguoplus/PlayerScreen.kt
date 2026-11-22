@@ -39,6 +39,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import android.app.Activity
+import android.app.PictureInPictureParams
+import android.os.Build
+import android.util.Rational
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -322,6 +326,17 @@ fun PlayerScreen(
                         Graph.library.defaultSpeed = next
                     }
                     Pill("选集") { showEpisodePicker = true }
+                    Pill("画中画") {
+                        val activity = context as? Activity
+                        runCatching {
+                            if (activity != null) {
+                                val params = PictureInPictureParams.Builder()
+                                    .setAspectRatio(Rational(9, 16))
+                                    .build()
+                                activity.enterPictureInPictureMode(params)
+                            }
+                        }
+                    }
                 }
             }
         }

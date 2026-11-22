@@ -19,6 +19,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -29,111 +30,266 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.hongguotv.core.Series
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 @Composable
-fun MineScreen(onOpen: (Series) -> Unit) {
+fun MineScreen(onOpen: (Series) -> Unit, onLogin: () -> Unit) {
     var tab by remember { mutableIntStateOf(0) }
     var refresh by remember { mutableIntStateOf(0) }
+    var cloudRefresh by remember { mutableIntStateOf(0) }
+    var unfinished by remember { mutableStateOf<List<UnfinishedItem>?>(null) }
+    var cloudError by remember { mutableStateOf<String?>(null) }
+    var nickname by remember(refresh) { mutableStateOf(Graph.account.nickname) }
+    val loggedIn = remember(refresh) { Graph.account.isLoggedIn() }
     val favorites = remember(refresh) { Graph.library.favorites() }
     val history = remember(refresh) { Graph.library.history() }
 
+    LaunchedEffect(cloudRefresh, loggedIn) {
+        if (!loggedIn) {
+            unfinished = emptyList()
+            return@LaunchedEffect
+        }
+        cloudError = null
+        unfinished = null
+        val result = withContext(Dispatchers.IO) {
+            runCatching { mergeCloudProgress(Graph.account.progress()) }
+        }
+        result.onSuccess { unfinished = it }.onFailure {
+            cloudError = it.message ?: "云端进度加载失败"
+            unfinished = emptyList()
+        }
+        refresh++
+    }
+
     Column(Modifier.fillMaxSize()) {
-        SectionTitle("我的追剧", trailing = "本地保存 · 不上传")
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    if (loggedIn) (nickname.ifBlank { "已登录" }) else "未登录",
+                    color = PlusColors.Text,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    if (loggedIn) "红果账号已连接 · 进度可同步" else "登录红果账号，自动找出你没看完的剧",
+                    color = PlusColors.SubText,
+                    fontSize = 11.sp,
+                    modifier = Modifier.padding(top = 3.dp)
+                )
+            }
+            Box(
+                Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(PlusColors.SurfaceHigh)
+                    .clickable {
+                        if (loggedIn) {
+                            Graph.account.clear()
+                            refresh++
+                            cloudRefresh++
+                        } else {
+                            onLogin()
+                        }
+                    }
+                    .padding(horizontal = 14.dp, vertical = 8.dp)
+            ) {
+                Text(
+                    if (loggedIn) "退出" else "登录",
+                    color = if (loggedIn) PlusColors.SubText else PlusColors.Accent,
+                    fontSize = 12.sp
+                )
+            }
+        }
+
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Pill("收藏 ${favorites.size}", tab == 0) { tab = 0 }
             Pill("历史 ${history.size}", tab == 1) { tab = 1 }
+            Pill("没看完", tab == 2) { tab = 2 }
         }
         Spacer(Modifier.height(10.dp))
-        val list = if (tab == 0) favorites else history.map { it.series }
-        if (list.isEmpty()) {
-            ErrorView(
-                message = if (tab == 0) "还没有收藏，看到喜欢的剧点个 ❤" else "还没有观看记录",
-                modifier = Modifier.fillMaxSize()
+
+        when (tab) {
+            0 -> SeriesList(
+                items = favorites,
+                emptyHint = "还没有收藏，看到喜欢的剧点个收藏",
+                subtitle = { series -> series.badge.ifBlank { "已收藏" } },
+                onOpen = onOpen,
+                onRemove = {
+                    Graph.library.removeFavorite(it.id)
+                    refresh++
+                }
             )
-        } else {
-            LazyColumn(
-                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-                modifier = Modifier.fillMaxSize()
-            ) {
-                items(list, key = { it.id }) { series ->
-                    val entry = if (tab == 1) history.firstOrNull { it.series.id == series.id } else null
-                    Row(
-                        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)),
-                        verticalAlignment = Alignment.CenterVertically
+
+            1 -> SeriesList(
+                items = history.map { it.series },
+                emptyHint = "还没有观看记录",
+                subtitle = { series ->
+                    history.firstOrNull { it.series.id == series.id }
+                        ?.let { "看到第 ${it.episodeIndex + 1}/${it.episodeCount} 集" }
+                        ?: ""
+                },
+                onOpen = onOpen,
+                onRemove = {
+                    Graph.library.removeHistory(it.id)
+                    refresh++
+                }
+            )
+
+            else -> {
+                val items = unfinished
+                when {
+                    !loggedIn -> ErrorView(
+                        message = "登录红果账号后，这里会列出你没看完的剧",
+                        modifier = Modifier.fillMaxSize()
+                    )
+
+                    items == null -> LoadingView("正在读取红果云端观看记录…")
+                    cloudError != null -> ErrorView(message = cloudError!!, onRetry = { cloudRefresh++ })
+                    items.isEmpty() -> ErrorView(
+                        message = "没有未看完的剧，或者云端还没有进度",
+                        onRetry = { cloudRefresh++ },
+                        modifier = Modifier.fillMaxSize()
+                    )
+
+                    else -> LazyColumn(
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        modifier = Modifier.fillMaxSize()
                     ) {
-                        Box(
-                            Modifier
-                                .size(width = 58.dp, height = 82.dp)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(PlusColors.SurfaceHigh)
-                                .clickable { onOpen(series) }
-                        ) {
-                            AsyncImage(
-                                model = series.cover,
-                                contentDescription = series.title,
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier.fillMaxSize()
-                            )
-                        }
-                        Column(
-                            Modifier
-                                .weight(1f)
-                                .clickable { onOpen(series) }
-                                .padding(start = 10.dp)
-                        ) {
-                            Text(
-                                series.title,
-                                color = PlusColors.Text,
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Text(
-                                if (entry != null) "看到第 ${entry.episodeIndex + 1}/${entry.episodeCount} 集" else (if (series.badge.isBlank()) "已收藏" else series.badge),
-                                color = PlusColors.SubText,
-                                fontSize = 11.sp,
-                                modifier = Modifier.padding(top = 4.dp)
-                            )
-                        }
-                        Text(
-                            "移除",
-                            color = PlusColors.SubText,
-                            fontSize = 11.sp,
-                            modifier = Modifier
-                                .clickable {
-                                    if (tab == 0) Graph.library.removeFavorite(series.id)
-                                    else Graph.library.removeHistory(series.id)
-                                    refresh++
+                        items(items, key = { it.series.id }) { item ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    Modifier
+                                        .size(width = 58.dp, height = 82.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(PlusColors.SurfaceHigh)
+                                        .clickable { onOpen(item.series) }
+                                ) {
+                                    AsyncImage(
+                                        model = item.series.cover,
+                                        contentDescription = item.series.title,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
                                 }
-                                .padding(8.dp)
-                        )
+                                Column(
+                                    Modifier.weight(1f).clickable { onOpen(item.series) }.padding(start = 10.dp)
+                                ) {
+                                    Text(
+                                        item.series.title,
+                                        color = PlusColors.Text,
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        "看到第 ${item.episodeIndex + 1}/${item.episodeCount} 集 · 本集已看 ${item.progressPercent}%",
+                                        color = PlusColors.SubText,
+                                        fontSize = 11.sp,
+                                        modifier = Modifier.padding(top = 4.dp)
+                                    )
+                                }
+                                Text(
+                                    "继续看",
+                                    color = PlusColors.Accent,
+                                    fontSize = 12.sp,
+                                    modifier = Modifier.clickable { onOpen(item.series) }.padding(8.dp)
+                                )
+                            }
+                        }
+                        item {
+                            Text(
+                                "刷新云端进度",
+                                color = PlusColors.SubText,
+                                fontSize = 12.sp,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { cloudRefresh++ }
+                                    .padding(vertical = 16.dp)
+                            )
+                        }
                     }
                 }
-                item {
-                    Text(
-                        if (tab == 0) "清空收藏" else "清空历史",
-                        color = PlusColors.SubText,
-                        fontSize = 12.sp,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                if (tab == 0) Graph.library.clearFavorites() else Graph.library.clearHistory()
-                                refresh++
-                            }
-                            .padding(vertical = 16.dp),
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+            }
+        }
+    }
+}
+
+@Composable
+private fun SeriesList(
+    items: List<Series>,
+    emptyHint: String,
+    subtitle: (Series) -> String,
+    onOpen: (Series) -> Unit,
+    onRemove: (Series) -> Unit
+) {
+    if (items.isEmpty()) {
+        ErrorView(message = emptyHint, modifier = Modifier.fillMaxSize())
+        return
+    }
+    LazyColumn(
+        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+        modifier = Modifier.fillMaxSize()
+    ) {
+        items(items, key = { it.id }) { series ->
+            Row(
+                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    Modifier
+                        .size(width = 58.dp, height = 82.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(PlusColors.SurfaceHigh)
+                        .clickable { onOpen(series) }
+                ) {
+                    AsyncImage(
+                        model = series.cover,
+                        contentDescription = series.title,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
                     )
                 }
+                Column(Modifier.weight(1f).clickable { onOpen(series) }.padding(start = 10.dp)) {
+                    Text(
+                        series.title,
+                        color = PlusColors.Text,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Text(
+                        subtitle(series),
+                        color = PlusColors.SubText,
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+                Text(
+                    "移除",
+                    color = PlusColors.SubText,
+                    fontSize = 11.sp,
+                    modifier = Modifier.clickable { onRemove(series) }.padding(8.dp)
+                )
             }
         }
     }
