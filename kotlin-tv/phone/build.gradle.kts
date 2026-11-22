@@ -11,6 +11,9 @@ val signingProperties = Properties().apply {
     if (config.exists()) config.inputStream().use { load(it) }
 }
 
+val appVersion = rootProject.file("../VERSION").takeIf { it.exists() }?.readText()?.trim()
+    ?.takeIf { it.isNotBlank() } ?: "1.1.0"
+
 fun signingValue(env: String, key: String): String? =
     System.getenv(env) ?: signingProperties.getProperty(key)
 
@@ -22,8 +25,8 @@ android {
         applicationId = "com.jx.hongguoplus"
         minSdk = 26
         targetSdk = 35
-        versionCode = System.getenv("HONGGUOPLUS_VERSION_CODE")?.toInt() ?: 1
-        versionName = System.getenv("HONGGUOPLUS_VERSION_NAME") ?: "1.0.0"
+        versionCode = System.getenv("HONGGUOPLUS_VERSION_CODE")?.toInt() ?: 2
+        versionName = System.getenv("HONGGUOPLUS_VERSION_NAME") ?: appVersion
         resourceConfigurations += listOf("zh")
     }
 
