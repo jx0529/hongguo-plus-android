@@ -44,12 +44,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.version.outputs.value }}
         run: |
-          gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
-            && gh release upload "v$VERSION" "HongguoPlus-$VERSION.apk" --repo "$GITHUB_REPOSITORY" --clobber \
-            || gh release create "v$VERSION" "HongguoPlus-$VERSION.apk" \
-                 --repo "$GITHUB_REPOSITORY" \
-                 --title "红果问候 Plius $VERSION" \
-                 --notes "手机竖屏沉浸式刷剧。上滑下一集、自动连播、断点续看、搜索联想、四榜、剧场筛选、收藏与历史。"
+          if gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "v$VERSION" "HongguoPlus-$VERSION.apk" --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "v$VERSION" "HongguoPlus-$VERSION.apk" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "红果Plus $VERSION" \
+              --notes "手机竖屏沉浸式刷剧。上滑下一集、自动连播、断点续看、搜索联想、四榜、剧场筛选、收藏与历史。"
+          fi
 
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
