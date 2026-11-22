@@ -1,0 +1,69 @@
+name: build-release
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+      ANDROID_HOME: /usr/local/lib/android/sdk
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 读取版本号
+        id: version
+        run: echo "value=$(cat VERSION)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: 准备 Android SDK
+        run: |
+          SDKMANAGER=$(ls -d "$ANDROID_SDK_ROOT"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | tail -1)
+          echo "sdkmanager=$SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          "$SDKMANAGER" "platform-tools" "platforms;android-36" "build-tools;36.0.0" >/dev/null 2>&1 || true
+          echo "sdk ok"
+
+      - name: 编译正式包
+        env:
+          HONGGUOPLUS_VERSION_NAME: ${{ steps.version.outputs.value }}
+          HONGGUOPLUS_VERSION_CODE: ${{ github.run_number }}
+        run: |
+          cd kotlin-tv
+          chmod +x gradlew
+          ./gradlew :phone:assembleRelease --no-daemon --stacktrace
+
+      - name: 整理产物
+        run: |
+          cp kotlin-tv/phone/build/outputs/apk/release/phone-release.apk \
+             "HongguoPlus-${{ steps.version.outputs.value }}.apk"
+
+      - name: 发布 Release（保留所有历史版本）
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          if gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "v$VERSION" "HongguoPlus-$VERSION.apk" --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "v$VERSION" "HongguoPlus-$VERSION.apk" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "红果Plus $VERSION" \
+              --notes "手机竖屏沉浸式刷剧。上滑下一集、自动连播、断点续看、搜索联想、四榜、剧场筛选、收藏与历史。"
+          fi
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: HongguoPlus-${{ steps.version.outputs.value }}
+          path: HongguoPlus-*.apk
