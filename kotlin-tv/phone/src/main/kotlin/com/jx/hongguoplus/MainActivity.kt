@@ -47,6 +47,7 @@ private sealed interface Route {
     data object Search : Route
     data object Login : Route
     data class Detail(val series: Series) : Route
+    data object Settings : Route
 }
 
 private data class PlayerArgs(
@@ -72,7 +73,7 @@ private fun AppRoot() {
     BackHandler(enabled = player != null || route != Route.Home) {
         when {
             player != null -> player = null
-            route is Route.Detail || route == Route.Login -> route = Route.Home
+            route is Route.Detail || route == Route.Login || route == Route.Settings -> route = Route.Home
             route == Route.Search -> route = Route.Home
             else -> route = Route.Home
         }
@@ -99,7 +100,13 @@ private fun AppRoot() {
                     Route.Rank -> RankScreen(onOpen = { route = Route.Detail(it) })
                     Route.Mine -> MineScreen(
                         onOpen = { route = Route.Detail(it) },
-                        onLogin = { route = Route.Login }
+                        onLogin = { route = Route.Login },
+                        onSettings = { route = Route.Settings }
+                    )
+                    Route.Settings -> SettingsScreen(
+                        onBack = { route = Route.Mine },
+                        onLogin = { route = Route.Login },
+                        onRefreshMine = { route = Route.Mine }
                     )
                     Route.Login -> LoginScreen(
                         onDone = { route = Route.Mine },
@@ -122,7 +129,7 @@ private fun AppRoot() {
                 active = when (route) {
                     Route.Theater -> 1
                     Route.Rank -> 2
-                    Route.Mine, Route.Login -> 4
+                    Route.Mine, Route.Login, Route.Settings -> 4
                     Route.Search -> 3
                     else -> 0
                 },

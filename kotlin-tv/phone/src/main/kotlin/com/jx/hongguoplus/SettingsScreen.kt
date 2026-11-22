@@ -1,0 +1,401 @@
+// SPDX-License-Identifier: GPL-3.0-only
+package com.jx.hongguoplus
+
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
+import com.hongguotv.core.CloudProfile
+import com.hongguotv.core.ContentType
+import com.hongguotv.core.PlaybackDeviceSession
+import com.hongguotv.core.RankBoard
+import com.hongguotv.core.RemoteVideo
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+/** 一行自检结果。 */
+data class CheckRow(val step: String, val ok: Boolean, val detail: String)
+
+@Composable
+fun SettingsScreen(onBack: () -> Unit, onLogin: () -> Unit, onRefreshMine: () -> Unit = {}) {
+    val context = LocalContext.current
+    val clipboard = LocalClipboardManager.current
+    val scope = rememberCoroutineScope()
+
+    var loggedIn by remember { mutableStateOf(Graph.account.isLoggedIn()) }
+    var profile by remember { mutableStateOf<CloudProfile?>(null) }
+    var profileError by remember { mutableStateOf<String?>(null) }
+    var cloudHistory by remember { mutableStateOf<Int?>(null) }
+    var cloudFavorites by remember { mutableStateOf<Int?>(null) }
+
+    var running by remember { mutableStateOf(false) }
+    val checks = remember { mutableStateListOf<CheckRow>() }
+
+    var version by remember {
+        mutableStateOf(
+            runCatching {
+                context.packageManager.getPackageInfo(context.packageName, 0).versionName
+            }.getOrNull().orEmpty()
+        )
+    }
+    var latest by remember { mutableStateOf<Updater.Release?>(null) }
+    var updateChecked by remember { mutableStateOf(false) }
+    var updateBusy by remember { mutableStateOf(false) }
+    var progress by remember { mutableIntStateOf(-1) }
+    var updateError by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(loggedIn) {
+        if (!loggedIn) {
+            profile = null
+            cloudHistory = null
+            cloudFavorites = null
+            return@LaunchedEffect
+        }
+        profileError = null
+        withContext(Dispatchers.IO) {
+            runCatching { Graph.account.profile() }
+                .onSuccess { profile = it }
+                .onFailure { profileError = it.message ?: "账户信息读取失败" }
+            cloudHistory = runCatching { Graph.account.progress().size }.getOrNull()
+            cloudFavorites = runCatching { Graph.account.favorites().size }.getOrNull()
+        }
+    }
+
+    Column(Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("‹", color = PlusColors.Text, fontSize = 24.sp, modifier = Modifier.clickable { onBack() })
+            Spacer(Modifier.size(8.dp))
+            Text("设置与自检", color = PlusColors.Text, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        }
+
+        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
+
+            // ── 账户信息 ─────────────────────────────────────────────
+            SectionTitle("账户")
+            Card {
+                if (!loggedIn) {
+                    Text("未登录红果账号", color = PlusColors.Text, fontSize = 14.sp)
+                    Spacer(Modifier.height(6.dp))
+                    Text("登录后这里会显示昵称、UID、头像、云端观看记录与收藏数量。", color = PlusColors.SubText, fontSize = 11.sp, lineHeight = 16.sp)
+                    Spacer(Modifier.height(12.dp))
+                    PillButton("登录红果账号", PlusColors.Accent, Color.White) { onLogin() }
+                } else {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        val avatar = profile?.avatarUrl.orEmpty()
+                        if (avatar.isNotBlank()) {
+                            AsyncImage(
+                                model = avatar,
+                                contentDescription = null,
+                                modifier = Modifier.size(52.dp).clip(CircleShape)
+                            )
+                        } else {
+                            Box(
+                                Modifier.size(52.dp).clip(CircleShape).background(PlusColors.SurfaceHigh),
+                                contentAlignment = Alignment.Center
+                            ) { Text("红", color = PlusColors.Gold, fontSize = 18.sp) }
+                        }
+                        Spacer(Modifier.size(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                profile?.nickname?.ifBlank { Graph.account.nickname }?.ifBlank { "红果用户" } ?: "红果用户",
+                                color = PlusColors.Text, fontSize = 16.sp, fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                "UID：${profile?.id?.ifBlank { "—" } ?: "—"}",
+                                color = PlusColors.SubText, fontSize = 11.sp, modifier = Modifier.padding(top = 3.dp)
+                            )
+                        }
+                        Box(
+                            Modifier.clip(RoundedCornerShape(50)).background(PlusColors.SurfaceHigh)
+                                .clickable {
+                                    Graph.account.clear()
+                                    loggedIn = false
+                                    onRefreshMine()
+                                }
+                                .padding(horizontal = 12.dp, vertical = 7.dp)
+                        ) { Text("退出", color = PlusColors.SubText, fontSize = 11.sp) }
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    InfoLine("登录方式", "手机号验证码（红果 passport）")
+                    InfoLine("会话状态", if ((profile?.id ?: "").isNotBlank() || profile != null) "有效" else "待刷新")
+                    InfoLine("云端观看记录", cloudHistory?.let { "$it 条" } ?: "读取中…")
+                    InfoLine("云端收藏", cloudFavorites?.let { "$it 部" } ?: "读取中…")
+                    InfoLine("设备 ID", Graph.account.credentials()?.deviceId?.ifBlank { "—" } ?: "—")
+                    profileError?.let {
+                        Spacer(Modifier.height(8.dp))
+                        Text(it, color = PlusColors.Accent, fontSize = 11.sp)
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    Text("账号信息只保存在本机，不上传任何第三方。", color = PlusColors.SubText, fontSize = 10.sp)
+                }
+            }
+
+            // ── 播放自检 ─────────────────────────────────────────────
+            Spacer(Modifier.height(18.dp))
+            SectionTitle("播放自检")
+            Card {
+                Text(
+                    "逐项检查 首页接口 → 榜单 → 设备注册 → 详情 → 取流 → 分段读取，哪一步空了一眼就能看出来。",
+                    color = PlusColors.SubText, fontSize = 11.sp, lineHeight = 16.sp
+                )
+                Spacer(Modifier.height(12.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    PillButton(
+                        if (running) "自检中…" else "开始自检",
+                        if (running) PlusColors.SurfaceHigh else PlusColors.Accent,
+                        if (running) PlusColors.SubText else Color.White
+                    ) {
+                        if (running) return@PillButton
+                        running = true
+                        checks.clear()
+                        scope.launch {
+                            val rows = withContext(Dispatchers.IO) { collectChecks() }
+                            checks.addAll(rows)
+                            running = false
+                        }
+                    }
+                    if (checks.isNotEmpty()) {
+                        PillButton("复制报告", PlusColors.SurfaceHigh, PlusColors.Text) {
+                            clipboard.setText(AnnotatedString(buildReport(checks, version)))
+                        }
+                    }
+                }
+                if (checks.isNotEmpty()) {
+                    Spacer(Modifier.height(12.dp))
+                    checks.forEach { row ->
+                        Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.Top) {
+                            Text(
+                                if (row.ok) "✓" else "✗",
+                                color = if (row.ok) PlusColors.Gold else PlusColors.Accent,
+                                fontSize = 13.sp,
+                                modifier = Modifier.padding(end = 8.dp)
+                            )
+                            Column(Modifier.weight(1f)) {
+                                Text(row.step, color = PlusColors.Text, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                                Text(row.detail, color = PlusColors.SubText, fontSize = 10.sp, lineHeight = 15.sp)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ── 应用更新 ─────────────────────────────────────────────
+            Spacer(Modifier.height(18.dp))
+            SectionTitle("应用更新")
+            Card {
+                InfoLine("当前版本", version.ifBlank { "—" })
+                InfoLine(
+                    "最新版本",
+                    when {
+                        updateBusy -> "检查中…"
+                        latest != null -> latest!!.version
+                        updateChecked -> "已是最新"
+                        else -> "未检查"
+                    }
+                )
+                latest?.let { rel ->
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        rel.notes.ifBlank { "无更新说明" }.take(400),
+                        color = PlusColors.SubText, fontSize = 11.sp, lineHeight = 16.sp
+                    )
+                }
+                updateError?.let {
+                    Spacer(Modifier.height(8.dp))
+                    Text(it, color = PlusColors.Accent, fontSize = 11.sp)
+                }
+                Spacer(Modifier.height(12.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    PillButton(
+                        if (updateBusy) "请稍候…" else "检查更新",
+                        PlusColors.SurfaceHigh, PlusColors.Text
+                    ) {
+                        if (updateBusy) return@PillButton
+                        updateBusy = true
+                        updateError = null
+                        scope.launch {
+                            val result = withContext(Dispatchers.IO) {
+                                runCatching { Updater.check(version) }
+                            }
+                            latest = result.getOrNull()
+                            updateChecked = true
+                            result.exceptionOrNull()?.let { updateError = it.message ?: "检查更新失败" }
+                            updateBusy = false
+                        }
+                    }
+                    if (latest != null) {
+                        PillButton(
+                            if (progress in 1..99) "下载中 ${progress}%" else "下载并安装",
+                            PlusColors.Accent, Color.White
+                        ) {
+                            if (progress in 0..99) return@PillButton
+                            val rel = latest ?: return@PillButton
+                            updateError = null
+                            progress = 0
+                            scope.launch {
+                                val result = withContext(Dispatchers.IO) {
+                                    runCatching {
+                                        Updater.download(context, rel) { p -> progress = p }
+                                    }
+                                }
+                                result.onSuccess { file ->
+                                    progress = 100
+                                    runCatching { Updater.install(context, file) }
+                                        .onFailure { updateError = it.message ?: "无法拉起安装器" }
+                                }.onFailure {
+                                    progress = -1
+                                    updateError = it.message ?: "下载失败"
+                                }
+                            }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+                Text("更新包来自 GitHub Releases，可直接覆盖安装，不会丢收藏与历史。", color = PlusColors.SubText, fontSize = 10.sp)
+            }
+
+            Spacer(Modifier.height(28.dp))
+        }
+    }
+}
+
+// ── 自检实现 ────────────────────────────────────────────────────
+private suspend fun collectChecks(): List<CheckRow> {
+    val rows = mutableListOf<CheckRow>()
+    suspend fun step(name: String, block: suspend () -> String) {
+        val started = System.currentTimeMillis()
+        val row = try {
+            val detail = kotlinx.coroutines.withTimeout(30_000) { block() }
+            CheckRow(name, true, "$detail · ${System.currentTimeMillis() - started}ms")
+        } catch (error: Throwable) {
+            CheckRow(
+                name,
+                false,
+                "${error::class.simpleName}: ${error.message ?: "无错误信息"} · ${System.currentTimeMillis() - started}ms"
+            )
+        }
+        rows.add(row)
+    }
+
+    var seriesId = ""
+    var episodeId = ""
+
+    step("① 首页接口") {
+        val page = Graph.repo.home(1, ContentType.SHORT)
+        seriesId = page.items.firstOrNull()?.id.orEmpty()
+        "返回 ${page.items.size} 部，首页第一是「${page.items.firstOrNull()?.title ?: "—"}」"
+    }
+
+    step("② 排行榜接口") {
+        val page = Graph.repo.ranking(RankBoard.TOTAL, 1)
+        if (seriesId.isBlank()) seriesId = page.items.firstOrNull()?.id.orEmpty()
+        "返回 ${page.items.size} 部"
+    }
+
+    step("③ 播放设备注册") {
+        val profile = PlaybackDeviceSession.shared.renew(Graph.http)
+        "device_id=${profile.values["device_id"]} iid=${profile.values["iid"]} cookie=${profile.cookie.length} 字节"
+    }
+
+    step("④ 剧集详情") {
+        if (seriesId.isBlank()) error("没有拿到剧集 ID，先修前面两步")
+        val detail = Graph.repo.detail(seriesId)
+        episodeId = detail.episodes.firstOrNull().orEmpty()
+        "「${detail.series.title}」共 ${detail.episodes.size} 集"
+    }
+
+    step("⑤ 取流接口") {
+        if (episodeId.isBlank()) error("没有拿到剧集 ID")
+        val stream = Graph.repo.stream(episodeId, 1080)
+        "清晰度 ${stream.quality}，地址长度 ${stream.url.length}，mime=${stream.mimeType}"
+    }
+
+    step("⑥ 分段读取") {
+        if (episodeId.isBlank()) error("没有拿到剧集 ID")
+        val stream = Graph.repo.stream(episodeId, 1080)
+        RemoteVideo(Graph.http, stream).use { remote ->
+            remote.prepare()
+            val head = remote.read(0, 1024 * 1024)
+            val tail = remote.read((remote.total - 65536).coerceAtLeast(0), 65536)
+            if (head.size < 8) error("读到 ${head.size} 字节，取流仍为空")
+            "总长 ${remote.total / 1024 / 1024}MB，首段 ${head.size} 字节，尾段 ${tail.size} 字节"
+        }
+    }
+    return rows
+}
+
+private fun buildReport(rows: List<CheckRow>, version: String): String = buildString {
+    appendLine("红果Plus 自检报告 v$version")
+    rows.forEach { row ->
+        appendLine("${if (row.ok) "[PASS]" else "[FAIL]"} ${row.step} —— ${row.detail}")
+    }
+}
+
+// ── 小组件 ──────────────────────────────────────────────────────
+@Composable
+private fun SectionTitle(text: String) {
+    Text(text, color = PlusColors.SubText, fontSize = 12.sp, modifier = Modifier.padding(bottom = 8.dp))
+}
+
+@Composable
+private fun Card(content: @Composable ColumnScopeAlias.() -> Unit) {
+    Column(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(PlusColors.Surface).padding(14.dp)
+    ) { content() }
+}
+
+private typealias ColumnScopeAlias = androidx.compose.foundation.layout.ColumnScope
+
+@Composable
+private fun InfoLine(label: String, value: String) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
+        Text(label, color = PlusColors.SubText, fontSize = 11.sp, modifier = Modifier.weight(1f))
+        Text(value, color = PlusColors.Text, fontSize = 11.sp)
+    }
+}
+
+@Composable
+private fun PillButton(text: String, bg: Color, fg: Color, onClick: () -> Unit) {
+    Box(
+        Modifier.clip(RoundedCornerShape(50)).background(bg).clickable { onClick() }
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        contentAlignment = Alignment.Center
+    ) { Text(text, color = fg, fontSize = 12.sp, fontWeight = FontWeight.Medium) }
+}

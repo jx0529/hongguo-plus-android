@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 package com.jx.hongguoplus
 
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -27,6 +30,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -44,10 +50,23 @@ fun LoginScreen(onDone: () -> Unit, onBack: () -> Unit) {
     var sentInfo by remember { mutableStateOf<String?>(null) }
     var counting by remember { mutableStateOf(0) }
     var busy by remember { mutableStateOf(false) }
+    var sending by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
-    var mfaHint by remember { mutableStateOf<String?>(null) }
+    var challenge by remember { mutableStateOf<PhoneLogin.UpSmsChallenge?>(null) }
+    var smsOpened by remember { mutableStateOf(false) }
     val login = remember { Graph.account.newLogin() }
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    val clipboard = LocalClipboardManager.current
+
+    // 拿到上行短信挑战后，自动带着号码和正文跳到短信界面（每轮只自动跳一次，避免反复打断）
+    LaunchedEffect(challenge) {
+        val c = challenge ?: return@LaunchedEffect
+        if (!smsOpened) {
+            smsOpened = true
+            openSmsComposer(context, c.channelMobile, c.smsContent)
+        }
+    }
 
     LaunchedEffect(counting) {
         if (counting > 0) {
@@ -82,15 +101,16 @@ fun LoginScreen(onDone: () -> Unit, onBack: () -> Unit) {
                     .clip(RoundedCornerShape(50))
                     .background(PlusColors.SurfaceHigh)
                     .clickable {
-                        if (busy) return@clickable
+                        if (sending || busy) return@clickable
                         val digits = phone.filter { it.isDigit() }
                         if (digits.length != 11) {
                             error = "请输入 11 位手机号"
                             return@clickable
                         }
-                        busy = true
+                        sending = true
                         error = null
-                        mfaHint = null
+                        challenge = null
+                        smsOpened = false
                         scope.launch {
                             val result = withContext(Dispatchers.IO) {
                                 runCatching { login.send(digits) }
@@ -99,14 +119,14 @@ fun LoginScreen(onDone: () -> Unit, onBack: () -> Unit) {
                                 sentInfo = "验证码已发送至 ${it.maskedMobile}"
                                 counting = it.retrySeconds.coerceIn(30, 120)
                             }.onFailure { error = friendly(it) }
-                            busy = false
+                            sending = false
                         }
                     }
                     .padding(horizontal = 18.dp, vertical = 11.dp)
             ) {
                 Text(
                     when {
-                        busy -> "发送中…"
+                        sending -> "发送中…"
                         counting > 0 -> "${counting}s 后重发"
                         else -> "获取验证码"
                     },
@@ -140,8 +160,7 @@ fun LoginScreen(onDone: () -> Unit, onBack: () -> Unit) {
                                 onDone()
                             }.onFailure { failure ->
                                 if (failure is PhoneLogin.UpSmsRequired) {
-                                    mfaHint = "平台要求你先向 ${failure.challenge.channelMobile} 发送一条验证短信，" +
-                                        "发送后点「我已发送，继续登录」"
+                                    challenge = failure.challenge
                                 } else {
                                     error = friendly(failure)
                                 }
@@ -159,31 +178,97 @@ fun LoginScreen(onDone: () -> Unit, onBack: () -> Unit) {
         if (sentInfo != null) {
             Text(sentInfo!!, color = PlusColors.SubText, fontSize = 12.sp, modifier = Modifier.padding(top = 12.dp))
         }
-        if (mfaHint != null) {
-            Spacer(Modifier.height(12.dp))
-            Text(mfaHint!!, color = PlusColors.Gold, fontSize = 12.sp, lineHeight = 18.sp)
-            Spacer(Modifier.height(10.dp))
-            Box(
+        challenge?.let { c ->
+            Spacer(Modifier.height(14.dp))
+            Column(
                 Modifier
-                    .clip(RoundedCornerShape(50))
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
                     .background(PlusColors.SurfaceHigh)
-                    .clickable {
-                        busy = true
-                        error = null
-                        scope.launch {
-                            val result = withContext(Dispatchers.IO) {
-                                runCatching { login.verifyUpSmsAndLogin(code) }
-                            }
-                            result.onSuccess { credentials ->
-                                Graph.account.save(credentials)
-                                onDone()
-                            }.onFailure { error = friendly(it) }
-                            busy = false
-                        }
-                    }
-                    .padding(horizontal = 18.dp, vertical = 10.dp)
+                    .padding(14.dp)
             ) {
-                Text("我已发送，继续登录", color = PlusColors.Text, fontSize = 13.sp)
+                Text("红果需要你再发一条验证短信", color = PlusColors.Gold, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "这是红果账号的安全校验：用你本人的手机号，把下面这条短信发给它给的号码，平台才认这次登录。",
+                    color = PlusColors.SubText,
+                    fontSize = 11.sp,
+                    lineHeight = 16.sp
+                )
+                Spacer(Modifier.height(10.dp))
+                Text("发送到：${c.channelMobile}", color = PlusColors.Text, fontSize = 13.sp)
+                Spacer(Modifier.height(8.dp))
+                Text("短信内容（原样发送，不要改）：", color = PlusColors.SubText, fontSize = 11.sp)
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    c.smsContent,
+                    color = PlusColors.Gold,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                    lineHeight = 22.sp
+                )
+                Spacer(Modifier.height(12.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Box(
+                        Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(50))
+                            .background(PlusColors.Accent)
+                            .clickable {
+                                smsOpened = true
+                                openSmsComposer(context, c.channelMobile, c.smsContent)
+                            }
+                            .padding(vertical = 11.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("打开短信，已自动填好", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Box(
+                        Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(PlusColors.Surface)
+                            .clickable {
+                                clipboard.setText(AnnotatedString(c.smsContent))
+                            }
+                            .padding(horizontal = 16.dp, vertical = 11.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("复制内容", color = PlusColors.Text, fontSize = 13.sp)
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(50))
+                        .background(PlusColors.Surface)
+                        .clickable {
+                            if (busy) return@clickable
+                            busy = true
+                            error = null
+                            scope.launch {
+                                val result = withContext(Dispatchers.IO) {
+                                    runCatching { login.verifyUpSmsAndLogin(code) }
+                                }
+                                result.onSuccess { credentials ->
+                                    Graph.account.save(credentials)
+                                    challenge = null
+                                    onDone()
+                                }.onFailure { error = friendly(it) }
+                                busy = false
+                            }
+                        }
+                        .padding(vertical = 11.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        if (busy) "校验中…" else "短信已发出，继续登录",
+                        color = PlusColors.Text,
+                        fontSize = 13.sp
+                    )
+                }
+                Spacer(Modifier.height(6.dp))
+                Text("发完短信再点上面的按钮；如果提示过期，重新获取验证码即可。", color = PlusColors.SubText, fontSize = 10.sp)
             }
         }
         if (error != null) {
@@ -226,4 +311,36 @@ private fun Field(label: String, value: String, hint: String, keyboard: Keyboard
 private fun friendly(failure: Throwable): String = when (failure) {
     is PhoneLogin.Failure -> failure.message ?: "登录失败"
     else -> failure.message ?: "登录失败，请稍后重试"
+}
+
+/**
+ * 拉起系统短信界面，并把号码和正文预填好，用户只要点发送。
+ * 依次尝试 smsto（带 sms_body，绝大多数短信 App 支持）→ 纯 smsto → 通用分享。
+ */
+private fun openSmsComposer(context: Context, number: String, body: String) {
+    val digits = number.filter { it.isDigit() || it == '+' }
+    val candidates = listOf(
+        Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:$digits")).apply {
+            putExtra("sms_body", body)
+            putExtra("exit_on_sent", true)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        },
+        Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:$digits")).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        },
+        Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, body)
+            putExtra("address", digits)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        },
+    )
+    for (intent in candidates) {
+        try {
+            context.startActivity(intent)
+            return
+        } catch (_: Exception) {
+            // 换下一个方案
+        }
+    }
 }

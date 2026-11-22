@@ -40,7 +40,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 @Composable
-fun MineScreen(onOpen: (Series) -> Unit, onLogin: () -> Unit) {
+fun MineScreen(onOpen: (Series) -> Unit, onLogin: () -> Unit, onSettings: () -> Unit = {}) {
     var tab by remember { mutableIntStateOf(0) }
     var refresh by remember { mutableIntStateOf(0) }
     var cloudRefresh by remember { mutableIntStateOf(0) }
@@ -109,6 +109,29 @@ fun MineScreen(onOpen: (Series) -> Unit, onLogin: () -> Unit) {
                 )
             }
         }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(PlusColors.Surface)
+                .clickable { onSettings() }
+                .padding(horizontal = 14.dp, vertical = 11.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("设置与自检", color = PlusColors.Text, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                Text(
+                    "账号信息 · 播放链路自检 · 检查更新",
+                    color = PlusColors.SubText,
+                    fontSize = 10.sp,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+            }
+            Text("›", color = PlusColors.SubText, fontSize = 16.sp)
+        }
+        Spacer(Modifier.height(10.dp))
 
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp),
