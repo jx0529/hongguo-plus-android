@@ -341,15 +341,18 @@ private suspend fun collectChecks(): List<CheckRow> {
         "「${detail.series.title}」共 ${detail.episodes.size} 集"
     }
 
-    step("⑤ 取流接口") {
+    step("⑤ 取流接口（自动换线）") {
         if (episodeId.isBlank()) error("没有拿到剧集 ID")
-        val stream = Graph.repo.stream(episodeId, 1080)
-        "清晰度 ${stream.quality}，地址长度 ${stream.url.length}，mime=${stream.mimeType}"
+        val stream = Streams.resolve(episodeId, 1080)
+        val attempts = Streams.lastAttempts.joinToString("；") { a ->
+            "${a.route}${if (a.ok) "成功" else "失败"}=${a.detail}"
+        }
+        "清晰度 ${stream.quality}，地址长度 ${stream.url.length}；线路：$attempts"
     }
 
     step("⑥ 分段读取") {
         if (episodeId.isBlank()) error("没有拿到剧集 ID")
-        val stream = Graph.repo.stream(episodeId, 1080)
+        val stream = Streams.resolve(episodeId, 1080)
         RemoteVideo(Graph.http, stream).use { remote ->
             remote.prepare()
             val head = remote.read(0, 1024 * 1024)

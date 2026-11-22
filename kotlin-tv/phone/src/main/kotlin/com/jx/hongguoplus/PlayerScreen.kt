@@ -102,7 +102,7 @@ fun PlayerScreen(
         error = null
         val result = withContext(Dispatchers.IO) {
             runCatching {
-                val info = Graph.repo.stream(episodeIds[index], quality)
+                val info = Streams.resolve(episodeIds[index], quality)
                 RemoteVideo(Graph.http, info).prepare()
             }
         }

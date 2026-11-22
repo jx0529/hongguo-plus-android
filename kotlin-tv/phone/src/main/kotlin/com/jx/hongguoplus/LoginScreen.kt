@@ -54,6 +54,9 @@ fun LoginScreen(onDone: () -> Unit, onBack: () -> Unit) {
     var error by remember { mutableStateOf<String?>(null) }
     var challenge by remember { mutableStateOf<PhoneLogin.UpSmsChallenge?>(null) }
     var smsOpened by remember { mutableStateOf(false) }
+    var challengeAt by remember { mutableStateOf(0L) }
+    var challengeLeft by remember { mutableStateOf(0) }
+    var verifyingNote by remember { mutableStateOf<String?>(null) }
     val login = remember { Graph.account.newLogin() }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -65,6 +68,20 @@ fun LoginScreen(onDone: () -> Unit, onBack: () -> Unit) {
         if (!smsOpened) {
             smsOpened = true
             openSmsComposer(context, c.channelMobile, c.smsContent)
+        }
+    }
+
+    // 上行短信校验窗口很短，给用户一个明确倒计时
+    LaunchedEffect(challengeAt) {
+        if (challengeAt <= 0L) {
+            challengeLeft = 0
+            return@LaunchedEffect
+        }
+        while (true) {
+            val left = (60 - (System.currentTimeMillis() - challengeAt) / 1000).toInt()
+            challengeLeft = left.coerceAtLeast(0)
+            if (left <= 0) break
+            kotlinx.coroutines.delay(1000)
         }
     }
 
@@ -161,6 +178,7 @@ fun LoginScreen(onDone: () -> Unit, onBack: () -> Unit) {
                             }.onFailure { failure ->
                                 if (failure is PhoneLogin.UpSmsRequired) {
                                     challenge = failure.challenge
+                                    challengeAt = System.currentTimeMillis()
                                 } else {
                                     error = friendly(failure)
                                 }
@@ -187,7 +205,13 @@ fun LoginScreen(onDone: () -> Unit, onBack: () -> Unit) {
                     .background(PlusColors.SurfaceHigh)
                     .padding(14.dp)
             ) {
-                Text("红果需要你再发一条验证短信", color = PlusColors.Gold, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                Text(
+                    if (challengeLeft > 0) "红果需要你再发一条验证短信（${challengeLeft}s 内有效）"
+                    else "这次校验已过期，请重新获取验证码",
+                    color = if (challengeLeft > 0) PlusColors.Gold else PlusColors.Accent,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold
+                )
                 Spacer(Modifier.height(6.dp))
                 Text(
                     "这是红果账号的安全校验：用你本人的手机号，把下面这条短信发给它给的号码，平台才认这次登录。",
@@ -246,16 +270,43 @@ fun LoginScreen(onDone: () -> Unit, onBack: () -> Unit) {
                             if (busy) return@clickable
                             busy = true
                             error = null
+                            verifyingNote = "正在确认平台是否收到短信…"
                             scope.launch {
-                                val result = withContext(Dispatchers.IO) {
-                                    runCatching { login.verifyUpSmsAndLogin(code) }
+                                var lastError: Throwable? = null
+                                var done = false
+                                repeat(10) { attempt ->
+                                    val result = withContext(Dispatchers.IO) {
+                                        runCatching { login.verifyUpSmsAndLogin(code) }
+                                    }
+                                    result.onSuccess { credentials ->
+                                        Graph.account.save(credentials)
+                                        challenge = null
+                                        verifyingNote = null
+                                        busy = false
+                                        done = true
+                                        onDone()
+                                    }.onFailure { failure ->
+                                        lastError = failure
+                                        val text = friendly(failure)
+                                        // 过期/风控类错误重试无意义，直接结束
+                                        if (text.contains("1066") || text.contains("过期")) {
+                                            verifyingNote = null
+                                            error = "校验窗口已过（平台只给了很短时间）\n处理办法：点上面的「获取验证码」重新发一次，短信一到手立刻点「继续登录」。"
+                                            busy = false
+                                            done = true
+                                        }
+                                    }
+                                    if (done) return@launch
+                                    if (attempt < 9) {
+                                        verifyingNote = "第 ${attempt + 2} 次确认中…（短信可能有 1–3 秒延迟）"
+                                        kotlinx.coroutines.delay(2000)
+                                    }
                                 }
-                                result.onSuccess { credentials ->
-                                    Graph.account.save(credentials)
-                                    challenge = null
-                                    onDone()
-                                }.onFailure { error = friendly(it) }
-                                busy = false
+                                if (!done) {
+                                    verifyingNote = null
+                                    busy = false
+                                    lastError?.let { error = friendly(it) }
+                                }
                             }
                         }
                         .padding(vertical = 11.dp),
@@ -268,7 +319,13 @@ fun LoginScreen(onDone: () -> Unit, onBack: () -> Unit) {
                     )
                 }
                 Spacer(Modifier.height(6.dp))
-                Text("发完短信再点上面的按钮；如果提示过期，重新获取验证码即可。", color = PlusColors.SubText, fontSize = 10.sp)
+                Text(
+                    "发完短信立刻点上面的按钮，程序会自动重试等平台收到短信；" +
+                        "超过 ${challengeLeft.coerceAtLeast(0)} 秒没成功就回到上面重新「获取验证码」，再发一次。",
+                    color = PlusColors.SubText,
+                    fontSize = 10.sp,
+                    lineHeight = 15.sp
+                )
             }
         }
         if (error != null) {
