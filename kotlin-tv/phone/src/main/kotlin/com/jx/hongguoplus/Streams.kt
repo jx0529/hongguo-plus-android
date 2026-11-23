@@ -32,7 +32,21 @@ object Streams {
         )
     }
 
+    /** 取流结果短期缓存：同一集重复进入不再重复请求接口。 */
+    private val cache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, StreamInfo>>()
+    private const val CACHE_MS = 8 * 60 * 1000L
+
+    fun cached(id: String, maxQuality: Int): StreamInfo? {
+        val hit = cache["$id|$maxQuality"] ?: return null
+        return if (System.currentTimeMillis() - hit.first < CACHE_MS) hit.second else null
+    }
+
     fun resolve(id: String, maxQuality: Int = 1080): StreamInfo {
+        cached(id, maxQuality)?.let { return it }
+        return resolveFresh(id, maxQuality)
+    }
+
+    private fun resolveFresh(id: String, maxQuality: Int): StreamInfo {
         val attempts = mutableListOf<Attempt>()
         val errors = mutableListOf<Throwable>()
 
@@ -44,6 +58,7 @@ object Streams {
         fun recordSuccess(route: String, info: StreamInfo): StreamInfo {
             attempts += Attempt(route, true, "清晰度 ${info.quality}，地址 ${info.url.length} 字符")
             lastAttempts = attempts.toList()
+            cache["$id|$maxQuality"] = System.currentTimeMillis() to info
             return info
         }
 

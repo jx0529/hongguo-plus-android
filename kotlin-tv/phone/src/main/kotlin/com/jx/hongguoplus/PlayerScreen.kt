@@ -162,6 +162,8 @@ fun PlayerScreen(
     var holdingSpeed by remember { mutableStateOf(false) }
     var clock by remember { mutableStateOf("") }
     var batteryPct by remember { mutableIntStateOf(-1) }
+    var startLatency by remember { mutableIntStateOf(-1) }
+    var startAt by remember { mutableLongStateOf(0L) }
     var charging by remember { mutableStateOf(false) }
     val drag = remember { Animatable(0f) }
     val uiScope = rememberCoroutineScope()
@@ -238,14 +240,21 @@ fun PlayerScreen(
     LaunchedEffect(index, quality) {
         loading = true
         error = null
+        startAt = SystemClock.uptimeMillis()
+        startLatency = -1
         val reusable = pool.remove(index)
+            ?: PrewarmPool.take(episodeIds[index], quality)
         val result = if (reusable != null) {
             Result.success(reusable)
         } else {
             withContext(Dispatchers.IO) {
                 runCatching {
                     val info = Streams.resolve(episodeIds[index], quality)
-                    RemoteVideo(Graph.http, info).prepare()
+                    RemoteVideo(
+                        Graph.http, info,
+                        chunkBytes = 512 * 1024,
+                        aheadBytes = 12L * 1024 * 1024
+                    ).prepare()
                 }
             }
         }
@@ -322,17 +331,21 @@ fun PlayerScreen(
         if (loading) return@LaunchedEffect
         prefetchJob?.cancel()
         prefetchJob = launch {
-            delay(900)
-            val targets = (1..5).flatMap { listOf(index + it, index - it) }
+            delay(120)
+            val targets = (1..6).flatMap { listOf(index + it, index - it) }
                 .filter { it in episodeIds.indices && it != index }
-            val gate = Semaphore(2)
+            val gate = Semaphore(4)
             targets.forEach { target ->
                 launch(Dispatchers.IO) {
                     gate.withPermit {
                         if (pool.containsKey(target)) return@withPermit
                         val video = runCatching {
                             val info = Streams.resolve(episodeIds[target], quality)
-                            RemoteVideo(Graph.http, info).prepare()
+                            RemoteVideo(
+                                Graph.http, info,
+                                chunkBytes = 512 * 1024,
+                                aheadBytes = 12L * 1024 * 1024
+                            ).prepare()
                         }.getOrNull()
                         if (video != null) {
                             if (pool.size < 12 && !pool.containsKey(target)) pool[target] = video
@@ -354,7 +367,12 @@ fun PlayerScreen(
     DisposableEffect(player) {
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
-                if (playbackState == Player.STATE_READY) loading = false
+                if (playbackState == Player.STATE_READY) {
+                    loading = false
+                    if (startAt > 0L && startLatency < 0) {
+                        startLatency = (SystemClock.uptimeMillis() - startAt).toInt()
+                    }
+                }
                 if (playbackState == Player.STATE_ENDED) {
                     runCatching { Graph.library.putHistory(series, index, episodeIds.size) }
                     if (index < episodeIds.lastIndex) {
@@ -981,7 +999,8 @@ fun PlayerScreen(
                     Spacer(Modifier.height(6.dp))
                     Text(
                         "第 ${index + 1}/${episodeIds.size} 集" +
-                            (if (series.badge.isNotBlank()) " · ${series.badge}" else ""),
+                            (if (series.badge.isNotBlank()) " · ${series.badge}" else "") +
+                            (if (startLatency > 0) "  ·  起播 $startLatency ms" else ""),
                         color = Color(0xFFAAAAAA), fontSize = 11.sp
                     )
                     if (series.tags.isNotBlank()) {

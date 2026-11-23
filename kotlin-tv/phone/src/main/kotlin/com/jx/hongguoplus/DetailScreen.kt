@@ -39,8 +39,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.hongguotv.core.Detail
+import com.hongguotv.core.RemoteVideo
 import com.hongguotv.core.Series
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -59,6 +61,23 @@ fun DetailScreen(
     LaunchedEffect(series.id) {
         val result = withContext(Dispatchers.IO) { runCatching { Graph.repo.detail(series.id) } }
         result.onSuccess { detail = it }.onFailure { error = it.message ?: "详情加载失败" }
+    }
+
+    // 详情一出来就把前 3 集的流预热好，点播放基本是秒开（起播目标 <400ms）
+    LaunchedEffect(detail?.episodes?.firstOrNull()) {
+        val list = detail?.episodes ?: return@LaunchedEffect
+        if (list.isEmpty()) return@LaunchedEffect
+        val quality = Graph.library.defaultQuality
+        withContext(Dispatchers.IO) {
+            list.take(3).forEach { id ->
+                launch {
+                    runCatching {
+                        val info = Streams.resolve(id, quality)
+                        PrewarmPool.put(id, quality, RemoteVideo(Graph.http, info, chunkBytes = 512 * 1024, aheadBytes = 12L * 1024 * 1024).prepare())
+                    }
+                }
+            }
+        }
     }
 
     val episodes = detail?.episodes ?: emptyList()

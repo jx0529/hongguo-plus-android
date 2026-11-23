@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.sp
 import com.hongguotv.core.CatalogPage
 import com.hongguotv.core.ContentType
 import com.hongguotv.core.RankBoard
+import com.hongguotv.core.CatalogSnapshot
 import com.hongguotv.core.Series
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -111,7 +112,23 @@ fun HomeScreen(onOpen: (Series) -> Unit) {
     val gridState = rememberLazyGridState()
     val scope = rememberCoroutineScope()
 
+    val appContext = androidx.compose.ui.platform.LocalContext.current.applicationContext
+
+    fun snapshotKey(index: Int) = "home_${types[index].name}"
+
     fun loadFirst(index: Int) {
+        // 先把上次的快照铺上去，避免白屏等接口
+        if (items.isEmpty()) {
+            runCatching {
+                appContext.getSharedPreferences("hongguoplus_feed", android.content.Context.MODE_PRIVATE)
+                    .getString(snapshotKey(index), null)
+                    ?.let { CatalogSnapshot.decode(it, System.currentTimeMillis()) }
+                    ?.let { cached ->
+                        items = cached.items
+                        hasMore = cached.hasMore
+                    }
+            }
+        }
         loading = true
         error = null
         scope.launch {
@@ -122,7 +139,16 @@ fun HomeScreen(onOpen: (Series) -> Unit) {
                 items = it.items
                 hasMore = it.hasMore
                 page = 1
-                gridState.scrollToItem(0)
+                if (items.isNotEmpty()) gridState.scrollToItem(0)
+                runCatching {
+                    appContext.getSharedPreferences("hongguoplus_feed", android.content.Context.MODE_PRIVATE)
+                        .edit()
+                        .putString(
+                            snapshotKey(index),
+                            CatalogSnapshot.encode(it.items, it.hasMore, System.currentTimeMillis())
+                        )
+                        .apply()
+                }
             }.onFailure {
                 items = emptyList()
                 error = it.message ?: "内容加载失败"
