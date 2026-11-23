@@ -531,11 +531,10 @@ fun PlayerScreen(
                     }
                 )
             }
-            .pointerInput(isPlaying) {
+            .pointerInput(Unit) {
                 detectTapGestures(onTap = {
-                    // 点视频直接暂停/继续，同时把控制层露出来
-                    showControls = true
-                    if (isPlaying) player.pause() else player.play()
+                    // 点一下只呼出/收起控制层，不打断播放（想暂停点中间的圆形按钮）
+                    showControls = !showControls
                 })
             }
     ) {
@@ -1288,6 +1287,30 @@ private fun PortraitControls(
                     )
             )
 
+            // 暂停时：整屏正中的播放按钮
+            if (!isPlaying) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Box(
+                        Modifier
+                            .size(72.dp)
+                            .clip(CircleShape)
+                            .background(Color(0x73000000))
+                            .clickable { onTogglePlay() },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Canvas(Modifier.size(28.dp)) {
+                            val path = Path().apply {
+                                moveTo(size.width * 0.26f, size.height * 0.1f)
+                                lineTo(size.width * 0.88f, size.height * 0.5f)
+                                lineTo(size.width * 0.26f, size.height * 0.9f)
+                                close()
+                            }
+                            drawPath(path, Color.White)
+                        }
+                    }
+                }
+            }
+
             Column(
                 Modifier
                     .fillMaxSize()
@@ -1343,31 +1366,6 @@ private fun PortraitControls(
 
                 Spacer(Modifier.weight(1f))
 
-                // 暂停时中央播放按钮
-                if (!isPlaying) {
-                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                        Box(
-                            Modifier
-                                .size(64.dp)
-                                .clip(CircleShape)
-                                .background(Color(0x66000000))
-                                .clickable { onTogglePlay() },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Canvas(Modifier.size(26.dp)) {
-                                val path = Path().apply {
-                                    moveTo(size.width * 0.28f, size.height * 0.12f)
-                                    lineTo(size.width * 0.86f, size.height * 0.5f)
-                                    lineTo(size.width * 0.28f, size.height * 0.88f)
-                                    close()
-                                }
-                                drawPath(path, Color.White)
-                            }
-                        }
-                    }
-                    Spacer(Modifier.weight(1f))
-                }
-
                 // 右侧竖排：收藏 / 评论 / 点赞 / 分享
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
                     Spacer(Modifier.weight(1f))
@@ -1377,29 +1375,31 @@ private fun PortraitControls(
                         verticalArrangement = Arrangement.spacedBy(20.dp)
                     ) {
                         PortraitAction(
-                            glyph = if (favorite) "★" else "☆",
+                            glyph = RailGlyph.STAR,
                             label = social.favoriteText.ifBlank { "收藏" },
-                            tint = if (favorite) PlusColors.Gold else Color.White
+                            active = favorite,
+                            activeTint = PlusColors.Gold
                         ) {
                             favorite = runCatching { Graph.library.toggleFavorite(series) }.getOrDefault(favorite)
                         }
                         PortraitAction(
-                            glyph = "💬",
+                            glyph = RailGlyph.COMMENT,
                             label = social.commentText.ifBlank { if (commentCount > 0) "$commentCount" else "评论" }
                         ) {
                             onComment()
                         }
                         PortraitAction(
-                            glyph = "♥",
+                            glyph = RailGlyph.HEART,
                             label = social.likeText.ifBlank { if (likeCount > 0) likeCount.toString() else "点赞" },
-                            tint = if (liked) Color(0xFFFF5A5F) else Color.White
+                            active = liked,
+                            activeTint = Color(0xFFFF4D5F)
                         ) {
                             liked = !liked
                             likeCount = (likeCount + if (liked) 1 else -1).coerceAtLeast(0)
                             val prefs = context.getSharedPreferences("hongguoplus_likes", android.content.Context.MODE_PRIVATE)
                             prefs.edit().putBoolean("liked_${series.id}", liked).putInt("likes_${series.id}", likeCount).apply()
                         }
-                        PortraitAction(glyph = "↗", label = social.shareText.ifBlank { "分享" }) { onShare() }
+                        PortraitAction(glyph = RailGlyph.SHARE, label = social.shareText.ifBlank { "分享" }) { onShare() }
                     }
                 }
 
@@ -1497,13 +1497,69 @@ private fun PortraitControls(
                         Spacer(Modifier.width(10.dp))
                         Box(
                             Modifier
-                                .size(38.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(Color(0x59FFFFFF))
+                                .size(44.dp)
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(Color(0x40000000))
                                 .clickable { onLandscape() },
                             contentAlignment = Alignment.Center
                         ) {
-                            Text("⤢", color = Color.White, fontSize = 18.sp)
+                            Canvas(Modifier.size(20.dp)) {
+                                val stroke = size.width * 0.1f
+                                fun arrow(x0: Float, y0: Float, x1: Float, y1: Float) {
+                                    drawLine(
+                                        Color.White,
+                                        Offset(size.width * x0, size.height * y0),
+                                        Offset(size.width * x1, size.height * y1),
+                                        strokeWidth = stroke, cap = androidx.compose.ui.graphics.StrokeCap.Round
+                                    )
+                                }
+                                // 左上 → 右下
+                                arrow(0.06f, 0.06f, 0.42f, 0.06f)
+                                arrow(0.06f, 0.06f, 0.06f, 0.42f)
+                                // 右下 → 左上
+                                arrow(0.94f, 0.94f, 0.58f, 0.94f)
+                                arrow(0.94f, 0.94f, 0.94f, 0.58f)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 控制层可见时：画面正中的播放/暂停按钮
+            if (visible) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Box(
+                        Modifier
+                            .size(70.dp)
+                            .clip(CircleShape)
+                            .background(Color(0x8C000000))
+                            .clickable { onTogglePlay() },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Canvas(Modifier.size(28.dp)) {
+                            if (isPlaying) {
+                                val bar = size.width * 0.16f
+                                drawRoundRect(
+                                    Color.White,
+                                    topLeft = androidx.compose.ui.geometry.Offset(size.width * 0.26f, size.height * 0.1f),
+                                    size = Size(bar, size.height * 0.8f),
+                                    cornerRadius = CornerRadius(bar * 0.3f)
+                                )
+                                drawRoundRect(
+                                    Color.White,
+                                    topLeft = androidx.compose.ui.geometry.Offset(size.width * 0.58f, size.height * 0.1f),
+                                    size = Size(bar, size.height * 0.8f),
+                                    cornerRadius = CornerRadius(bar * 0.3f)
+                                )
+                            } else {
+                                val path = Path().apply {
+                                    moveTo(size.width * 0.28f, size.height * 0.12f)
+                                    lineTo(size.width * 0.86f, size.height * 0.5f)
+                                    lineTo(size.width * 0.28f, size.height * 0.88f)
+                                    close()
+                                }
+                                drawPath(path, Color.White)
+                            }
                         }
                     }
                 }
@@ -1552,13 +1608,18 @@ private fun PortraitControls(
     }
 }
 
+/** 右侧栏图标类型。 */
+private enum class RailGlyph { STAR, COMMENT, HEART, SHARE }
+
 @Composable
 private fun PortraitAction(
-    glyph: String,
+    glyph: RailGlyph,
     label: String,
-    tint: Color = Color.White,
+    active: Boolean = false,
+    activeTint: Color = Color.White,
     onClick: () -> Unit
 ) {
+    val tint = if (active) activeTint else Color.White
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
             Modifier
@@ -1568,10 +1629,90 @@ private fun PortraitAction(
                 .clickable { onClick() },
             contentAlignment = Alignment.Center
         ) {
-            Text(glyph, color = tint, fontSize = 20.sp)
+            Canvas(Modifier.size(22.dp)) { RailIcon.draw(this, glyph, tint) }
         }
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(5.dp))
         Text(label, color = Color(0xE6FFFFFF), fontSize = 10.sp)
+    }
+}
+
+/** 右侧栏图标：全部用 Canvas 画，避免 emoji 风格不一致。 */
+
+private object RailIcon {
+    fun draw(scope: androidx.compose.ui.graphics.drawscope.DrawScope, glyph: RailGlyph, tint: Color) {
+        val w = scope.size.width
+        val h = scope.size.height
+        when (glyph) {
+            RailGlyph.STAR -> {
+                val path = Path()
+                val cx = w / 2f
+                val cy = h / 2f
+                val outer = w * 0.5f
+                val inner = outer * 0.42f
+                for (i in 0 until 10) {
+                    val r = if (i % 2 == 0) outer else inner
+                    val angle = Math.toRadians(-90.0 + i * 36.0)
+                    val x = cx + (r * Math.cos(angle)).toFloat()
+                    val y = cy + (r * Math.sin(angle)).toFloat()
+                    if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+                }
+                path.close()
+                scope.drawPath(path, tint)
+            }
+            RailGlyph.COMMENT -> {
+                // 圆角气泡 + 小尾巴
+                val radius = w * 0.22f
+                val bubble = Path().apply {
+                    addRoundRect(
+                        androidx.compose.ui.geometry.RoundRect(
+                            left = 0f, top = 0f, right = w, bottom = h * 0.78f,
+                            cornerRadius = CornerRadius(radius)
+                        )
+                    )
+                }
+                scope.drawPath(bubble, tint)
+                val tail = Path().apply {
+                    moveTo(w * 0.26f, h * 0.72f)
+                    lineTo(w * 0.24f, h)
+                    lineTo(w * 0.52f, h * 0.74f)
+                    close()
+                }
+                scope.drawPath(tail, tint)
+                // 三个点用背景色抠出来
+                val dot = w * 0.085f
+                for (i in 0..2) {
+                    scope.drawCircle(
+                        Color(0x33000000).copy(alpha = 0.75f),
+                        radius = dot,
+                        center = androidx.compose.ui.geometry.Offset(w * (0.24f + i * 0.26f), h * 0.38f)
+                    )
+                }
+            }
+            RailGlyph.HEART -> {
+                val path = Path().apply {
+                    moveTo(w * 0.5f, h * 0.92f)
+                    cubicTo(w * 0.12f, h * 0.62f, w * 0.02f, h * 0.38f, w * 0.18f, h * 0.2f)
+                    cubicTo(w * 0.32f, h * 0.06f, w * 0.46f, h * 0.12f, w * 0.5f, h * 0.26f)
+                    cubicTo(w * 0.54f, h * 0.12f, w * 0.68f, h * 0.06f, w * 0.82f, h * 0.2f)
+                    cubicTo(w * 0.98f, h * 0.38f, w * 0.88f, h * 0.62f, w * 0.5f, h * 0.92f)
+                    close()
+                }
+                scope.drawPath(path, tint)
+            }
+            RailGlyph.SHARE -> {
+                // 斜向箭头
+                val stroke = w * 0.11f
+                scope.drawLine(tint, androidx.compose.ui.geometry.Offset(w * 0.1f, h * 0.9f),
+                    androidx.compose.ui.geometry.Offset(w * 0.82f, h * 0.18f), stroke)
+                val head = Path().apply {
+                    moveTo(w * 0.4f, h * 0.14f)
+                    lineTo(w * 0.9f, h * 0.1f)
+                    lineTo(w * 0.86f, h * 0.6f)
+                    close()
+                }
+                scope.drawPath(head, tint)
+            }
+        }
     }
 }
 
