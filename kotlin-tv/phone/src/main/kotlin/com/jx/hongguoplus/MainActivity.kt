@@ -161,7 +161,8 @@ private fun AppRoot() {
         release?.let { info ->
             AlertDialog(
                 onDismissRequest = { if (updateProgress < 0) release = null },
-                title = { Text("发现新版本 ${info.version}") },
+                title = { Text("发现新版本 ${info.version}") }
+                // 点「更新并重启」→ 应用内下载 → 系统安装 → 安装完成后自动重启 App,
                 text = {
                     Column {
                         if (info.notes.isNotBlank()) {
@@ -206,7 +207,7 @@ private fun AppRoot() {
                                 }
                             }
                         }
-                    ) { Text(if (updateProgress >= 0) "下载中…" else "立即更新") }
+                    ) { Text(if (updateProgress >= 0) "下载中…" else "更新并重启") }
                 },
                 dismissButton = {
                     TextButton(onClick = { release = null }, enabled = updateProgress < 0) { Text("稍后") }
