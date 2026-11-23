@@ -19,10 +19,13 @@ object Updater {
         val tag: String,
         val notes: String,
         val apkUrl: String,
-        val size: Long
+        val size: Long,
+        val altUrl: String = ""
     )
 
     private const val API = "https://api.github.com/repos/jx0529/hongguo-plus-android/releases/latest"
+    // 高速 CDN：jsDelivr 直接读仓库 dist 分支（国内通常秒开），比 GitHub 稳定得多
+    private const val CDN_MANIFEST = "https://cdn.jsdelivr.net/gh/jx0529/hongguo-plus-android@dist/latest.json"
 
     private val http: OkHttpClient by lazy {
         OkHttpClient.Builder()
@@ -34,7 +37,35 @@ object Updater {
 
     /** 阻塞调用，请在 IO 线程执行。返回 null 表示已是最新或检查失败。 */
     fun check(currentVersion: String): Release? =
-        runCatching { fetch(currentVersion) }.getOrNull()
+        runCatching { fetchFromCdn(currentVersion) ?: fetch(currentVersion) }.getOrNull()
+
+    /** 先从 CDN 上的更新清单取：一条小 JSON，国内基本不受墙影响。 */
+    private fun fetchFromCdn(currentVersion: String): Release? {
+        val url = "$CDN_MANIFEST?t=${System.currentTimeMillis() / 3600_000L}"
+        val request = Request.Builder()
+            .url(url)
+            .header("User-Agent", "HongguoPlus")
+            .header("Cache-Control", "no-cache")
+            .build()
+        return http.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) return null
+            val body = response.body?.string().orEmpty()
+            if (body.isBlank()) return null
+            val json = JSONObject(body)
+            val version = json.optString("version").removePrefix("v")
+            if (version.isBlank() || !isNewer(version, currentVersion)) return null
+            val apkUrl = json.optString("url")
+            if (apkUrl.isBlank()) return null
+            Release(
+                version = version,
+                tag = "v$version",
+                notes = json.optString("notes").take(3000),
+                apkUrl = apkUrl,
+                size = json.optLong("size"),
+                altUrl = json.optString("github")
+            )
+        }
+    }
 
     private fun fetch(currentVersion: String): Release? {
         val request = Request.Builder()
@@ -159,13 +190,16 @@ object Updater {
     }
 
     /** 国内直连 github.com 经常被墙：按顺序尝试多个加速镜像。 */
-    private fun mirrors(url: String): List<String> = listOf(
-        url,
-        "https://ghfast.top/$url",
-        "https://gh-proxy.com/$url",
-        "https://v6.gh-proxy.org/$url",
-        "https://ghproxy.net/$url"
-    )
+    private fun mirrors(url: String): List<String> {
+        if (url.contains("cdn.jsdelivr.net")) return listOf(url, "https://fastly.jsdelivr.net" + url.substringAfter("cdn.jsdelivr.net"))
+        return listOf(
+            url,
+            "https://ghfast.top/$url",
+            "https://gh-proxy.com/$url",
+            "https://v6.gh-proxy.org/$url",
+            "https://ghproxy.net/$url"
+        )
+    }
 
     private fun fetchTo(url: String, target: File, startBytes: Long, release: Release, onProgress: (Int) -> Unit): Long {
         val builder = Request.Builder().url(url).header("User-Agent", "HongguoPlus")
@@ -199,7 +233,11 @@ object Updater {
         if (target.exists() && release.size > 0 && target.length() == release.size) return target
 
         var lastError: Throwable? = null
-        for (url in mirrors(release.apkUrl)) {
+        val sources = buildList {
+            addAll(mirrors(release.apkUrl))
+            if (release.altUrl.isNotBlank()) addAll(mirrors(release.altUrl))
+        }
+        for (url in sources) {
             val have = if (target.exists()) target.length() else 0L
             if (release.size > 0 && have == release.size) return target
             runCatching { fetchTo(url, target, have, release, onProgress) }
