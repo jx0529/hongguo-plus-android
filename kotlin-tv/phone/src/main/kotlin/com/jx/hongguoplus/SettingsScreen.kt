@@ -275,6 +275,11 @@ fun SettingsScreen(
                 InfoLine("加密方式", "Android Keystore · AES-256-GCM")
                 InfoLine("存放位置", "仅本机，不同步到任何服务器")
                 InfoLine("网页登录", if (SiteSession.has(context)) "已登录（站点片源可用）" else "未登录")
+                InfoLine("站点凭证长度", "${SiteSession.cookie(context).length} 字节")
+                InfoLine(
+                    "App 账号凭证",
+                    runCatching { Graph.account.credentials()?.cookie?.length ?: 0 }.getOrDefault(0).let { "$it 字节" }
+                )
                 Spacer(Modifier.height(10.dp))
                 PillButton(
                     if (SiteSession.has(context)) "重新登录红果网页" else "登录红果网页（解锁播放）",

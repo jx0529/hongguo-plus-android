@@ -35,7 +35,8 @@ object SiteDash {
         val bandwidthAudio: Int,
         val width: Int,
         val height: Int,
-        val quality: String
+        val quality: String,
+        val encrypted: Boolean = false
     ) {
         val heightPx: Int get() = height
     }
@@ -117,9 +118,34 @@ object SiteDash {
                 bandwidthAudio = audioObj.optInt("bitrate", 128_000),
                 width = info.optInt("width", 720),
                 height = info.optInt("height", 1280),
-                quality = info.optString("definition", definition)
+                quality = info.optString("definition", definition),
+                encrypted = sniffEncrypted(
+                    info.optString("main_url"),
+                    info.optString("init_range")
+                )
             )
         }
+    }
+
+    /**
+     * 站点的片源是 CENC 加密流（init 段里有 encv/enca/sinf/tenc/schm=cenc），
+     * 只下发密文分段，密钥由网页播放器自己的解密模块持有。
+     * 原生播放器拿到这种流只会报 "Unexpected runtime error"，所以先探一下再决定走哪条路。
+     */
+    private fun sniffEncrypted(url: String, initRange: String): Boolean {
+        if (url.isBlank() || initRange.isBlank()) return false
+        return runCatching {
+            val request = Request.Builder()
+                .url(url)
+                .header("Range", "bytes=$initRange")
+                .header("User-Agent", UA)
+                .build()
+            http.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return false
+                val bytes = response.body?.bytes() ?: return false
+                String(bytes, Charsets.ISO_8859_1).let { it.contains("tenc") || it.contains("sinf") }
+            }
+        }.getOrDefault(false)
     }
 
     /**

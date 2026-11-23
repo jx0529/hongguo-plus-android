@@ -328,6 +328,16 @@ fun PlayerScreen(
                     }
                 }
                 if (plan == null && dashError == null) dashError = "站点播放接口未返回片源"
+                if (plan != null && plan.encrypted) {
+                    // 加密流原生解码不了：直接把情况说清楚，别让用户对着黑屏猜
+                    loading = false
+                    error = buildString {
+                        append("该集片源为加密流（CENC），原生播放器无法解码。")
+                        append("\n点「网页播放」可在应用内直接观看这一集。")
+                        dashError?.let { append("\n站点直连：").append(it) }
+                    }
+                    return@LaunchedEffect
+                }
                 if (plan != null) {
                     sitePlan = plan
                     routeHint = "站点直连 ${plan.quality}"
