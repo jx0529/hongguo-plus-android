@@ -308,11 +308,26 @@ fun PlayerScreen(
             // App 接口拿不到时才去试站点直连：网页接口对未登录/受保护集数回 403，
             // 反过来先打它反而容易把这次会话带进风控，所以只做兜底。
             if (reusable == null) {
-                val plan = withContext(Dispatchers.IO) {
+                var plan = withContext(Dispatchers.IO) {
                     runCatching { SiteDash.resolve(series.id, episodeIds[index], quality) }
                         .onFailure { dashError = it.message }
                         .getOrNull()
                 }
+                // 直接被 403 挡掉时，改用 WebView 里那份真实登录态再请求一次：
+                // 站点认的不只是 Cookie，还要浏览器同源请求，这一步能解锁前几集之外的集数。
+                if (plan == null) {
+                    for (definition in listOf("720p", "480p", "360p")) {
+                        val (status, body) = SiteWebFetch.playInfo(context, series.id, episodeIds[index], definition)
+                            ?: break
+                        if (status in 200..299 && body.isNotBlank()) {
+                            plan = runCatching {
+                                SiteDash.parsePlan(org.json.JSONObject(body), definition)
+                            }.getOrNull()
+                            if (plan != null) break
+                        }
+                    }
+                }
+                if (plan == null && dashError == null) dashError = "站点播放接口未返回片源"
                 if (plan != null) {
                     sitePlan = plan
                     routeHint = "站点直连 ${plan.quality}"

@@ -90,7 +90,13 @@ object SiteDash {
             if (!response.isSuccessful) throw java.io.IOException("站点播放接口 HTTP ${response.code}")
             val text = response.body?.string().orEmpty()
             if (text.isBlank()) throw java.io.IOException("站点播放接口返回空响应")
-            val root = JSONObject(text)
+            return parsePlan(JSONObject(text), definition)
+        }
+    }
+
+    /** 把 play-info 的 JSON 解析成播放计划（HTTP 与 WebView 两条通道共用）。 */
+    fun parsePlan(root: JSONObject, definition: String): Plan? {
+        run {
             val base = root.optJSONObject("base_resp")
             val code = base?.optInt("StatusCode", 0) ?: 0
             if (code != 0) throw java.io.IOException("站点播放接口业务异常：$code")
