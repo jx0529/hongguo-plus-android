@@ -208,6 +208,27 @@ fun SettingsScreen(
                     color = PlusColors.SubText, fontSize = 11.sp, lineHeight = 16.sp
                 )
                 Spacer(Modifier.height(12.dp))
+                Text("取流线路", color = PlusColors.Text, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                Spacer(Modifier.height(6.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    val route = Streams.routePreference()
+                    PillButton(
+                        "自动（Native 优先）",
+                        if (route == "auto") PlusColors.Accent else PlusColors.SurfaceHigh,
+                        if (route == "auto") Color.White else PlusColors.Text
+                    ) { Streams.setRoutePreference("auto") }
+                    PillButton(
+                        "仅 Phoenix（延迟高）",
+                        if (route == "phoenix") PlusColors.Accent else PlusColors.SurfaceHigh,
+                        if (route == "phoenix") Color.White else PlusColors.Text
+                    ) { Streams.setRoutePreference("phoenix") }
+                }
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "两条都是 App 自己的取流接口，不再走网页那条。Phoenix 由服务端中转，起播慢一些但更稳。",
+                    color = PlusColors.SubText, fontSize = 10.sp, lineHeight = 15.sp
+                )
+                Spacer(Modifier.height(12.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     PillButton(
                         if (running) "自检中…" else "开始自检",

@@ -31,7 +31,7 @@ android {
         applicationId = "com.jx.hongguoplus"
         minSdk = 26
         targetSdk = 35
-        versionCode = System.getenv("HONGGUOPLUS_VERSION_CODE")?.toInt() ?: 39
+        versionCode = System.getenv("HONGGUOPLUS_VERSION_CODE")?.toInt() ?: 40
         versionName = System.getenv("HONGGUOPLUS_VERSION_NAME") ?: appVersion
         resourceConfigurations += listOf("zh")
     }

@@ -22,7 +22,16 @@ object Graph {
     val http: OkHttpClient by lazy {
         OkHttpClient.Builder()
             // 站点 CDN 会在重定向下发 ttwid，缺少 Cookie 的取流请求只会拿到空响应
-            .cookieJar(MemoryCookies())
+            .cookieJar(
+                AccountCookies(MemoryCookies()) {
+                    // App 账号登录态要带进取流请求，否则服务端会把设备当未登录回 200+0 字节
+                    runCatching {
+                        if (Graph::account.isInitialized) {
+                            Graph.account.credentials()?.cookie.orEmpty()
+                        } else ""
+                    }.getOrDefault("")
+                }
+            )
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .callTimeout(45, TimeUnit.SECONDS)

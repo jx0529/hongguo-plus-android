@@ -103,6 +103,17 @@ object Streams {
         )
     }.getOrNull()
 
+    /** 用户在设置页选的取流线路：auto / phoenix（延迟高但更稳的那条）。 */
+    fun routePreference(): String = runCatching {
+        Graph.appContext.getSharedPreferences("hongguoplus_ui", android.content.Context.MODE_PRIVATE)
+            .getString("stream_route", "auto").orEmpty()
+    }.getOrDefault("auto")
+
+    fun setRoutePreference(value: String) {
+        Graph.appContext.getSharedPreferences("hongguoplus_ui", android.content.Context.MODE_PRIVATE)
+            .edit().putString("stream_route", value).apply()
+    }
+
     fun resolve(id: String, maxQuality: Int = 1080): StreamInfo {
         cached(id, maxQuality)?.let { return it }
         return resolveFresh(id, maxQuality)
@@ -132,6 +143,22 @@ object Streams {
             lastAttempts = attempts.toList()
             remember(id, maxQuality, info)
             return info
+        }
+
+        // 用户指定「只要 Phoenix」时直接走那一级，不再试 Native
+        if (routePreference() == "phoenix") {
+            try {
+                return recordSuccess("Phoenix", phoenix.stream(id, maxQuality))
+            } catch (error: Throwable) {
+                record("Phoenix", error)
+            }
+            try {
+                return recordSuccess("Phoenix·自动档", phoenix.stream(id, PlaybackQualityMode.AUTO_COMPAT))
+            } catch (error: Throwable) {
+                record("Phoenix·自动档", error)
+            }
+            lastAttempts = attempts.toList()
+            throw errors.lastOrNull() ?: UnplayableVideoException("本集片源暂不可用，请换一集")
         }
 
         // ① Native：按用户档位
