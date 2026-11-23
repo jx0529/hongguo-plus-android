@@ -158,6 +158,7 @@ fun PlayerScreen(
     var prevPreview by remember { mutableStateOf<RemoteVideo?>(null) }
     var nextPreview by remember { mutableStateOf<RemoteVideo?>(null) }
     var pageHeight by remember { mutableIntStateOf(0) }
+    var previewArmed by remember { mutableStateOf(false) }
     var videoAspect by remember { mutableFloatStateOf(16f / 9f) }
     var holdingSpeed by remember { mutableStateOf(false) }
     var clock by remember { mutableStateOf("") }
@@ -331,10 +332,10 @@ fun PlayerScreen(
         if (loading) return@LaunchedEffect
         prefetchJob?.cancel()
         prefetchJob = launch {
-            delay(120)
-            val targets = (1..6).flatMap { listOf(index + it, index - it) }
+            delay(2000)
+            val targets = (1..3).flatMap { listOf(index + it, index - it) }
                 .filter { it in episodeIds.indices && it != index }
-            val gate = Semaphore(4)
+            val gate = Semaphore(2)
             targets.forEach { target ->
                 launch(Dispatchers.IO) {
                     gate.withPermit {
@@ -344,11 +345,11 @@ fun PlayerScreen(
                             RemoteVideo(
                                 Graph.http, info,
                                 chunkBytes = 512 * 1024,
-                                aheadBytes = 12L * 1024 * 1024
+                                aheadBytes = 2L * 1024 * 1024
                             ).prepare()
                         }.getOrNull()
                         if (video != null) {
-                            if (pool.size < 12 && !pool.containsKey(target)) pool[target] = video
+                            if (pool.size < 8 && !pool.containsKey(target)) pool[target] = video
                             else runCatching { video.close() }
                         }
                     }
@@ -357,9 +358,17 @@ fun PlayerScreen(
         }
     }
 
+    // 换集就把上一/下一集的预览实例关掉，别让它们继续挂着连接
+    LaunchedEffect(index) {
+        runCatching { prevPreview?.close() }
+        runCatching { nextPreview?.close() }
+        prevPreview = null
+        nextPreview = null
+    }
+
     // 滑远之后，把池子里超出 ±6 集的实例关掉，避免占着连接
     LaunchedEffect(index) {
-        pool.keys.filter { kotlin.math.abs(it - index) > 6 }.forEach { key ->
+        pool.keys.filter { kotlin.math.abs(it - index) > 4 }.forEach { key ->
             runCatching { pool.remove(key)?.close() }
         }
     }
@@ -368,7 +377,6 @@ fun PlayerScreen(
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
                 if (playbackState == Player.STATE_READY) {
-                    loading = false
                     if (startAt > 0L && startLatency < 0) {
                         startLatency = (SystemClock.uptimeMillis() - startAt).toInt()
                     }
@@ -381,6 +389,14 @@ fun PlayerScreen(
                         runCatching { player.pause() }
                         ending = true
                     }
+                }
+            }
+
+            // 真正画出第一帧才收掉 loading，否则会出现“黑屏但没提示”的错觉
+            override fun onRenderedFirstFrame() {
+                loading = false
+                if (startAt > 0L && startLatency < 0) {
+                    startLatency = (SystemClock.uptimeMillis() - startAt).toInt()
                 }
             }
 
@@ -415,9 +431,9 @@ fun PlayerScreen(
     }
 
     // 上下滑预览用的相邻集流：单独实例、预读更小，滑到才播放
-    LaunchedEffect(index, quality, loading) {
-        if (loading) return@LaunchedEffect
-        delay(600)
+    LaunchedEffect(index, quality, loading, previewArmed) {
+        if (!previewArmed || loading) return@LaunchedEffect
+        delay(400)
         launch(Dispatchers.IO) {
             if (index > 0) {
                 val v = runCatching {
@@ -467,6 +483,7 @@ fun PlayerScreen(
                 detectVerticalDragGestures(
                     onVerticalDrag = { change, amount ->
                         change.consume()
+                        previewArmed = true
                         uiScope.launch {
                             drag.snapTo((drag.value + amount).coerceIn(-limit * 1.05f, limit * 1.05f))
                         }

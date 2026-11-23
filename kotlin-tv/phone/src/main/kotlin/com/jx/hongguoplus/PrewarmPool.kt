@@ -8,7 +8,7 @@ import com.hongguotv.core.RemoteVideo
  */
 object PrewarmPool {
     private val entries = LinkedHashMap<String, RemoteVideo>(8, 0.75f, true)
-    private const val MAX = 8
+    private const val MAX = 4
 
     @Synchronized
     fun key(episodeId: String, quality: Int) = "$episodeId|$quality"
