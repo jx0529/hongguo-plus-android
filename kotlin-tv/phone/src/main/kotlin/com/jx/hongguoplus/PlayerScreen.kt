@@ -167,6 +167,8 @@ fun PlayerScreen(
     var batteryPct by remember { mutableIntStateOf(-1) }
     var startLatency by remember { mutableIntStateOf(-1) }
     var slowLoad by remember { mutableStateOf(false) }
+    var pendingSeek by remember { mutableLongStateOf(0L) }
+    val veil = remember { Animatable(0f) }
     var startAt by remember { mutableLongStateOf(0L) }
     var charging by remember { mutableStateOf(false) }
     val drag = remember { Animatable(0f) }
@@ -242,6 +244,12 @@ fun PlayerScreen(
         }
     }
 
+    LaunchedEffect(index) {
+        // 换集不做生硬闪切：先压一层黑再淡出，画面是渐进的
+        veil.snapTo(0.92f)
+        veil.animateTo(0f, tween(360))
+    }
+
     LaunchedEffect(index, quality) {
         loading = true
         error = null
@@ -272,13 +280,10 @@ fun PlayerScreen(
             player.setMediaSource(source, true)
             player.prepare()
             player.setPlaybackSpeed(speed)
-            // 断点续看：同一集有记录就从上次位置接着播
+            // 断点续看：同一集有记录就记下待跳转位置，等播放器 READY 再 seek
             val (savedIndex, savedPosition) = Graph.library.progressOf(series.id)
-            if (savedIndex == index && savedPosition > 3000L) {
-                runCatching { player.seekTo(savedPosition) }
-            }
+            pendingSeek = if (savedIndex == index && savedPosition > 3000L) savedPosition else 0L
             player.playWhenReady = true
-            runCatching { Graph.library.putHistory(series, index, episodeIds.size) }
             // loading 由首帧回调收起，避免"黑屏但没有任何提示"
         }.onFailure {
             loading = false
@@ -374,6 +379,11 @@ fun PlayerScreen(
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
                 if (playbackState == Player.STATE_READY) {
+                    if (pendingSeek > 0L) {
+                        val target = pendingSeek
+                        pendingSeek = 0L
+                        runCatching { player.seekTo(target) }
+                    }
                     if (startAt > 0L && startLatency < 0) {
                         startLatency = (SystemClock.uptimeMillis() - startAt).toInt()
                     }
@@ -577,6 +587,14 @@ fun PlayerScreen(
             )
         }
 
+        if (veil.value > 0.01f) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = veil.value))
+            )
+        }
+
         // 长按左/右区域 2x 快进
         if (!showEpisodePicker && !ending && !showInfo && !showDanmakuSettings && !showDanmakuInput) {
             SpeedHoldZone(
@@ -769,7 +787,7 @@ fun PlayerScreen(
                         color = Color.White,
                         fontSize = 26.sp,
                         modifier = Modifier.clickable {
-                            runCatching { Graph.library.putHistory(series, index, episodeIds.size) }
+                            runCatching { Graph.library.putProgress(series, index, episodeIds.size, position) }
                             onClose()
                         }
                     )
@@ -908,7 +926,7 @@ fun PlayerScreen(
                 startLatency = startLatency,
                 commentCount = danmaku.size,
                 onBack = {
-                    runCatching { Graph.library.putHistory(series, index, episodeIds.size) }
+                    runCatching { Graph.library.putProgress(series, index, episodeIds.size, position) }
                     onClose()
                 },
                 onTogglePlay = {
