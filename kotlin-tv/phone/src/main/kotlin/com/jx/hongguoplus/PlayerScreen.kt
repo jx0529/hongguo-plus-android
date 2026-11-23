@@ -36,6 +36,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -60,6 +61,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -477,7 +479,7 @@ fun PlayerScreen(
     Box(
         Modifier
             .fillMaxSize()
-            .background(Color.Black)
+            .background(if (isLandscape) Color.Black else Color(0xFF141416))
             .pointerInput(index, episodeIds.size, pageHeight) {
                 val limit = if (pageHeight > 0) pageHeight.toFloat() else 1f
                 detectVerticalDragGestures(
@@ -724,6 +726,7 @@ fun PlayerScreen(
             }
         }
 
+        if (isLandscape) {
         AnimatedVisibility(
             visible = showControls,
             enter = fadeIn(tween(200)),
@@ -871,6 +874,75 @@ fun PlayerScreen(
                     Spacer(Modifier.width(12.dp))
                 }
             }
+        }
+        }
+
+        // 竖屏：抖音式极简界面（顶部集数/倍速/更多，右侧竖排操作，底部剧集信息+进度+选集）
+        if (!isLandscape) {
+            PortraitControls(
+                visible = showControls,
+                series = series,
+                episodeIndex = index,
+                episodeCount = episodeIds.size,
+                speed = speed,
+                position = position,
+                duration = duration,
+                isPlaying = isPlaying,
+                startLatency = startLatency,
+                commentCount = danmaku.size,
+                onBack = {
+                    runCatching { Graph.library.putHistory(series, index, episodeIds.size) }
+                    onClose()
+                },
+                onTogglePlay = {
+                    if (isPlaying) player.pause() else player.play()
+                    showControls = true
+                },
+                onSeek = { ratio ->
+                    if (duration > 0) {
+                        position = (duration * ratio).toLong()
+                        player.seekTo(position)
+                    }
+                },
+                onSpeed = {
+                    val next = speedOptions[(speedOptions.indexOf(speed) + 1) % speedOptions.size]
+                    speed = next
+                    player.setPlaybackSpeed(next)
+                    Graph.library.defaultSpeed = next
+                },
+                onFavorite = {
+                    runCatching { Graph.library.toggleFavorite(series) }
+                },
+                onComment = { showDanmakuInput = true; danmakuNote = null },
+                onShare = {
+                    runCatching {
+                        val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(android.content.Intent.EXTRA_TEXT, "https://hongguoduanju.com/detail?series_id=${series.id}")
+                        }
+                        context.startActivity(android.content.Intent.createChooser(intent, "分享到"))
+                    }
+                },
+                onEpisodes = { showEpisodePicker = true },
+                onInfo = { showInfo = true },
+                onQuality = {
+                    quality = qualityOptions[(qualityOptions.indexOf(quality) + 1) % qualityOptions.size]
+                    Graph.library.defaultQuality = quality
+                },
+                onDanmakuSettings = { showDanmakuSettings = true },
+                onPip = {
+                    val activity = context as? Activity
+                    runCatching {
+                        if (activity != null) {
+                            val params = PictureInPictureParams.Builder().setAspectRatio(Rational(9, 16)).build()
+                            activity.enterPictureInPictureMode(params)
+                        }
+                    }
+                },
+                onLandscape = {
+                    runCatching { activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE }
+                }
+            )
         }
 
         if (showDanmakuInput) {
@@ -1104,53 +1176,549 @@ fun PlayerScreen(
         }
 
         if (showEpisodePicker) {
-            Box(Modifier.fillMaxSize().background(Color(0xCC000000))) {
-                Column(Modifier.fillMaxSize().padding(16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            "${series.title} · 共 ${episodeIds.size} 集",
-                            color = Color.White,
-                            fontSize = 15.sp,
-                            modifier = Modifier.weight(1f)
+            EpisodeSheet(
+                series = series,
+                episodeCount = episodeIds.size,
+                current = index,
+                favorite = Graph.library.isFavorite(series.id),
+                onPick = { picked ->
+                    index = picked
+                    showEpisodePicker = false
+                },
+                onFavorite = { runCatching { Graph.library.toggleFavorite(series) } },
+                onInfo = { showEpisodePicker = false; showInfo = true },
+                onSeries = { showEpisodePicker = false; ending = true },
+                onDismiss = { showEpisodePicker = false }
+            )
+        }
+    }
+}
+
+
+// ── 竖屏：抖音式播放界面 ─────────────────────────────────────────
+@Composable
+private fun PortraitControls(
+    visible: Boolean,
+    series: Series,
+    episodeIndex: Int,
+    episodeCount: Int,
+    speed: Float,
+    position: Long,
+    duration: Long,
+    isPlaying: Boolean,
+    startLatency: Int,
+    commentCount: Int,
+    onBack: () -> Unit,
+    onTogglePlay: () -> Unit,
+    onSeek: (Float) -> Unit,
+    onSpeed: () -> Unit,
+    onFavorite: () -> Unit,
+    onComment: () -> Unit,
+    onShare: () -> Unit,
+    onEpisodes: () -> Unit,
+    onInfo: () -> Unit,
+    onQuality: () -> Unit,
+    onDanmakuSettings: () -> Unit,
+    onPip: () -> Unit,
+    onLandscape: () -> Unit
+) {
+    var showMore by remember { mutableStateOf(false) }
+    var favorite by remember { mutableStateOf(Graph.library.isFavorite(series.id)) }
+    var liked by remember { mutableStateOf(false) }
+    var likeCount by remember { mutableIntStateOf(0) }
+    val context = LocalContext.current
+
+    LaunchedEffect(series.id) {
+        favorite = Graph.library.isFavorite(series.id)
+        val prefs = context.getSharedPreferences("hongguoplus_likes", android.content.Context.MODE_PRIVATE)
+        liked = prefs.getBoolean("liked_${series.id}", false)
+        likeCount = prefs.getInt("likes_${series.id}", 0)
+    }
+
+    AnimatedVisibility(visible = visible, enter = fadeIn(tween(200)), exit = fadeOut(tween(280))) {
+        Box(Modifier.fillMaxSize()) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(120.dp)
+                    .background(Brush.verticalGradient(listOf(Color(0xB3000000), Color.Transparent)))
+            )
+            Box(
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .height(260.dp)
+                    .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xE6000000)))
+                    )
+            )
+
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .windowInsetsPadding(
+                        WindowInsets.safeDrawing.only(
+                            WindowInsetsSides.Top + WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom
                         )
-                        Text(
-                            "收起",
-                            color = PlusColors.SubText,
-                            fontSize = 12.sp,
-                            modifier = Modifier.clickable { showEpisodePicker = false }
-                        )
-                    }
-                    Spacer(Modifier.height(12.dp))
-                    LazyVerticalGrid(
-                        columns = GridCells.Fixed(6),
-                        contentPadding = PaddingValues(bottom = 20.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.fillMaxSize()
+                    )
+            ) {
+                // 顶部：返回 · 集数 · 倍速 · 更多
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(start = 10.dp, end = 12.dp, top = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "‹",
+                        color = Color.White,
+                        fontSize = 30.sp,
+                        modifier = Modifier
+                            .clickable { onBack() }
+                            .padding(horizontal = 4.dp)
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        "第 ${episodeIndex + 1} 集",
+                        color = Color.White,
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Spacer(Modifier.weight(1f))
+                    Row(
+                        Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(Color(0x4D000000))
+                            .clickable { onSpeed() }
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        items(episodeIds.size) { i ->
-                            Box(
-                                Modifier
-                                    .height(44.dp)
-                                    .background(
-                                        if (i == index) PlusColors.Accent.copy(alpha = 0.3f) else PlusColors.SurfaceHigh,
-                                        RoundedCornerShape(8.dp)
-                                    )
-                                    .clickable {
-                                        index = i
-                                        showEpisodePicker = false
-                                    },
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    "${i + 1}",
-                                    color = if (i == index) PlusColors.Accent else Color.White,
-                                    fontSize = 13.sp
-                                )
+                        Text("⟳", color = Color(0xFFE6E6E6), fontSize = 12.sp)
+                        Spacer(Modifier.width(4.dp))
+                        Text("${speed}x", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                    }
+                    Spacer(Modifier.width(14.dp))
+                    Text(
+                        "⋮",
+                        color = Color.White,
+                        fontSize = 20.sp,
+                        modifier = Modifier.clickable { showMore = true }
+                    )
+                }
+
+                Spacer(Modifier.weight(1f))
+
+                // 暂停时中央播放按钮
+                if (!isPlaying) {
+                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        Box(
+                            Modifier
+                                .size(64.dp)
+                                .clip(CircleShape)
+                                .background(Color(0x66000000))
+                                .clickable { onTogglePlay() },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Canvas(Modifier.size(26.dp)) {
+                                val path = Path().apply {
+                                    moveTo(size.width * 0.28f, size.height * 0.12f)
+                                    lineTo(size.width * 0.86f, size.height * 0.5f)
+                                    lineTo(size.width * 0.28f, size.height * 0.88f)
+                                    close()
+                                }
+                                drawPath(path, Color.White)
                             }
                         }
                     }
+                    Spacer(Modifier.weight(1f))
                 }
+
+                // 右侧竖排：收藏 / 评论 / 点赞 / 分享
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
+                    Spacer(Modifier.weight(1f))
+                    Column(
+                        Modifier.padding(end = 12.dp, bottom = 6.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(20.dp)
+                    ) {
+                        PortraitAction(
+                            glyph = if (favorite) "★" else "☆",
+                            label = "收藏",
+                            tint = if (favorite) PlusColors.Gold else Color.White
+                        ) {
+                            favorite = runCatching { Graph.library.toggleFavorite(series) }.getOrDefault(favorite)
+                        }
+                        PortraitAction(glyph = "💬", label = if (commentCount > 0) "$commentCount" else "评论") {
+                            onComment()
+                        }
+                        PortraitAction(
+                            glyph = "♥",
+                            label = if (likeCount > 0) likeCount.toString() else "点赞",
+                            tint = if (liked) Color(0xFFFF5A5F) else Color.White
+                        ) {
+                            liked = !liked
+                            likeCount = (likeCount + if (liked) 1 else -1).coerceAtLeast(0)
+                            val prefs = context.getSharedPreferences("hongguoplus_likes", android.content.Context.MODE_PRIVATE)
+                            prefs.edit().putBoolean("liked_${series.id}", liked).putInt("likes_${series.id}", likeCount).apply()
+                        }
+                        PortraitAction(glyph = "↗", label = "分享") { onShare() }
+                    }
+                }
+
+                // 底部：剧集信息 + 进度 + 选集条
+                Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 10.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "系列剧 · 全 $episodeCount 集",
+                            color = Color(0xFFD6D6D6),
+                            fontSize = 11.sp,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(50))
+                                .background(Color(0x4D000000))
+                                .padding(horizontal = 9.dp, vertical = 4.dp)
+                        )
+                        if (startLatency >= 0) {
+                            Spacer(Modifier.width(8.dp))
+                            Text("起播 ${startLatency}ms", color = Color(0x99FFFFFF), fontSize = 10.sp)
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        series.title,
+                        color = Color.White,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.clickable { onInfo() }
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "第 ${episodeIndex + 1} 集",
+                            color = Color(0xFFB3B3B3),
+                            fontSize = 12.sp
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            "展开",
+                            color = Color(0xFFB3B3B3),
+                            fontSize = 12.sp,
+                            modifier = Modifier.clickable { onInfo() }
+                        )
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    // 细进度条（点哪跳哪）
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(14.dp)
+                            .pointerInput(duration) {
+                                detectTapGestures { offset ->
+                                    if (size.width > 0) onSeek((offset.x / size.width).coerceIn(0f, 1f))
+                                }
+                            },
+                        contentAlignment = Alignment.CenterStart
+                    ) {
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .height(3.dp)
+                                .clip(RoundedCornerShape(50))
+                                .background(Color(0x4DFFFFFF))
+                        )
+                        val ratio = if (duration > 0) (position.toFloat() / duration).coerceIn(0f, 1f) else 0f
+                        Box(
+                            Modifier
+                                .fillMaxWidth(ratio)
+                                .height(3.dp)
+                                .clip(RoundedCornerShape(50))
+                                .background(PlusColors.Accent)
+                        )
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(formatTime(position), color = Color(0xB3FFFFFF), fontSize = 10.sp)
+                        Spacer(Modifier.weight(1f))
+                        Text(formatTime(duration), color = Color(0xB3FFFFFF), fontSize = 10.sp)
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Row(
+                            Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(50))
+                                .background(Color(0x59000000))
+                                .clickable { onEpisodes() }
+                                .padding(horizontal = 14.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("选集 · 全 $episodeCount 集", color = Color.White, fontSize = 13.sp)
+                            Spacer(Modifier.weight(1f))
+                            Text("⌃", color = Color(0xFFB3B3B3), fontSize = 13.sp)
+                        }
+                        Spacer(Modifier.width(10.dp))
+                        Box(
+                            Modifier
+                                .size(38.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(Color(0x59FFFFFF))
+                                .clickable { onFavorite() },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text("＋", color = Color.White, fontSize = 18.sp)
+                        }
+                    }
+                }
+            }
+
+            // 更多菜单
+            if (showMore) {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .background(Color(0x99000000))
+                        .clickable { showMore = false }
+                )
+                Column(
+                    Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(top = 92.dp, end = 16.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Color(0xF21F1F21))
+                        .clickable { }
+                        .padding(vertical = 4.dp)
+                ) {
+                    listOf(
+                        "清晰度：当前档位" to onQuality,
+                        "弹幕设置" to onDanmakuSettings,
+                        "简介" to onInfo,
+                        "横屏观看" to onLandscape,
+                        "画中画" to onPip
+                    ).forEach { (label, action) ->
+                        Text(
+                            label,
+                            color = Color.White,
+                            fontSize = 13.sp,
+                            modifier = Modifier
+                                .clickable {
+                                    showMore = false
+                                    action()
+                                }
+                                .fillMaxWidth()
+                                .padding(horizontal = 18.dp, vertical = 12.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PortraitAction(
+    glyph: String,
+    label: String,
+    tint: Color = Color.White,
+    onClick: () -> Unit
+) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(
+            Modifier
+                .size(46.dp)
+                .clip(CircleShape)
+                .background(Color(0x33000000))
+                .clickable { onClick() },
+            contentAlignment = Alignment.Center
+        ) {
+            Text(glyph, color = tint, fontSize = 20.sp)
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(label, color = Color(0xE6FFFFFF), fontSize = 10.sp)
+    }
+}
+
+// ── 选集：底部圆角弹层 ───────────────────────────────────────────
+@Composable
+private fun EpisodeSheet(
+    series: Series,
+    episodeCount: Int,
+    current: Int,
+    favorite: Boolean,
+    onPick: (Int) -> Unit,
+    onFavorite: () -> Unit,
+    onInfo: () -> Unit,
+    onSeries: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val pageSize = 30
+    var page by remember(current) { mutableIntStateOf(current / pageSize) }
+    var fav by remember(favorite) { mutableStateOf(favorite) }
+    val pages = ((episodeCount + pageSize - 1) / pageSize).coerceAtLeast(1)
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color(0x80000000))
+            .clickable { onDismiss() }
+    ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.84f)
+                .align(Alignment.BottomCenter)
+                .clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
+                .background(Color(0xFF1E1E20))
+                .clickable { }
+                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom))
+        ) {
+            Box(
+                Modifier
+                    .padding(top = 10.dp)
+                    .width(38.dp)
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(Color(0x66FFFFFF))
+                    .align(Alignment.CenterHorizontally)
+            )
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, end = 16.dp, top = 14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    Modifier
+                        .width(48.dp)
+                        .height(64.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(PlusColors.SurfaceHigh)
+                ) {
+                    if (series.cover.isNotBlank()) {
+                        AsyncImage(
+                            model = series.cover,
+                            contentDescription = series.title,
+                            contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                }
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        series.title,
+                        color = Color.White,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "第 ${current / pageSize + 1} 段 · 全 $episodeCount 集",
+                        color = Color(0xFF8C8C8C),
+                        fontSize = 12.sp
+                    )
+                }
+            }
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, top = 18.dp, bottom = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(26.dp)
+            ) {
+                Text(
+                    "简介",
+                    color = Color(0xFF8C8C8C),
+                    fontSize = 15.sp,
+                    modifier = Modifier.clickable { onInfo() }
+                )
+                Text(
+                    "选集",
+                    color = Color.White,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    "系列剧",
+                    color = Color(0xFF8C8C8C),
+                    fontSize = 15.sp,
+                    modifier = Modifier.clickable { onSeries() }
+                )
+            }
+            // 分段切换
+            LazyRow(
+                Modifier.fillMaxWidth(),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(20.dp)
+            ) {
+                items(pages) { p ->
+                    val start = p * pageSize + 1
+                    val end = minOf((p + 1) * pageSize, episodeCount)
+                    Text(
+                        "$start-$end",
+                        color = if (p == page) Color.White else Color(0xFF7A7A7A),
+                        fontSize = 13.sp,
+                        fontWeight = if (p == page) FontWeight.SemiBold else FontWeight.Normal,
+                        modifier = Modifier.clickable { page = p }
+                    )
+                }
+            }
+            LazyVerticalGrid(
+                columns = GridCells.Fixed(6),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                val from = page * pageSize
+                val to = minOf(from + pageSize, episodeCount)
+                items(to - from) { offset ->
+                    val i = from + offset
+                    Box(
+                        Modifier
+                            .height(44.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(if (i == current) Color(0x33FF5A36) else Color(0xFF2A2A2D))
+                            .clickable { onPick(i) },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            "${i + 1}",
+                            color = if (i == current) PlusColors.Accent else Color(0xFFDDDDDD),
+                            fontSize = 13.sp,
+                            fontWeight = if (i == current) FontWeight.SemiBold else FontWeight.Normal
+                        )
+                        if (i == current) {
+                            Text(
+                                "▮▮",
+                                color = PlusColors.Accent,
+                                fontSize = 6.sp,
+                                modifier = Modifier
+                                    .align(Alignment.TopCenter)
+                                    .padding(top = 4.dp)
+                            )
+                        }
+                    }
+                }
+            }
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 10.dp)
+                    .height(46.dp)
+                    .clip(RoundedCornerShape(23.dp))
+                    .background(PlusColors.Accent)
+                    .clickable {
+                        fav = runCatching { Graph.library.toggleFavorite(series) }.getOrDefault(fav)
+                        onFavorite()
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    if (fav) "★ 已收藏" else "☆ 收藏",
+                    color = Color.White,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
             }
         }
     }
