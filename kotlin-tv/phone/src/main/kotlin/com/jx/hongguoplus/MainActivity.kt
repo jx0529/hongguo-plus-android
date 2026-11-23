@@ -161,8 +161,7 @@ private fun AppRoot() {
         release?.let { info ->
             AlertDialog(
                 onDismissRequest = { if (updateProgress < 0) release = null },
-                title = { Text("发现新版本 ${info.version}") }
-                // 点「更新并重启」→ 应用内下载 → 系统安装 → 安装完成后自动重启 App,
+                title = { Text("发现新版本 ${info.version}") },
                 text = {
                     Column {
                         if (info.notes.isNotBlank()) {
