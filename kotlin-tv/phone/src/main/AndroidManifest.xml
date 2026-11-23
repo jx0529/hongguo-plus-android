@@ -45,5 +45,12 @@
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
+        <receiver
+            android:name=".InstallResultReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.jx.hongguoplus.INSTALL_RESULT" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

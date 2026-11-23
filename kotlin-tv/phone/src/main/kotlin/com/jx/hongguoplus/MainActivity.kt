@@ -209,6 +209,19 @@ private fun AppRoot() {
                     ) { Text(if (updateProgress >= 0) "下载中…" else "更新并重启") }
                 },
                 dismissButton = {
+                    TextButton(
+                        onClick = {
+                            runCatching {
+                                appContext.startActivity(
+                                    android.content.Intent(
+                                        android.content.Intent.ACTION_VIEW,
+                                        android.net.Uri.parse("https://github.com/jx0529/hongguo-plus-android/releases/latest")
+                                    ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                                )
+                            }
+                        },
+                        enabled = updateProgress < 0
+                    ) { Text("浏览器打开") }
                     TextButton(onClick = { release = null }, enabled = updateProgress < 0) { Text("稍后") }
                 }
             )

@@ -26,7 +26,7 @@ object Updater {
 
     private val http: OkHttpClient by lazy {
         OkHttpClient.Builder()
-            .connectTimeout(15, TimeUnit.SECONDS)
+            .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(60, TimeUnit.SECONDS)
             .callTimeout(120, TimeUnit.SECONDS)
             .build()
@@ -68,6 +68,10 @@ object Updater {
 
     /** 下载到 cache/updates，返回安装包文件。 */
     fun download(context: Context, release: Release, onProgress: (Int) -> Unit): File {
+        return downloadResume(context, release, onProgress)
+    }
+
+    private fun legacyDownload(context: Context, release: Release, onProgress: (Int) -> Unit): File {
         val dir = File(context.cacheDir, "updates").apply { mkdirs() }
         val target = File(dir, "HongguoPlus-${release.version}.apk")
         if (target.exists() && release.size > 0 && target.length() == release.size) return target
@@ -94,15 +98,118 @@ object Updater {
         return target
     }
 
-    /** 拉起系统安装器。 */
-    fun install(context: Context, apk: File) {
-        val uri: Uri = FileProvider.getUriForFile(context, "${context.packageName}.updates", apk)
-        val intent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(uri, "application/vnd.android.package-archive")
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    /** 是否允许本应用安装未知来源的包；不允许时先引导去开权限。 */
+    fun canInstall(context: Context): Boolean =
+        android.os.Build.VERSION.SDK_INT < 26 || context.packageManager.canRequestPackageInstalls()
+
+    fun openInstallPermission(context: Context) {
+        runCatching {
+            val intent = Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES)
+                .setData(Uri.parse("package:${context.packageName}"))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
         }
-        context.startActivity(intent)
+    }
+
+    /**
+     * 走 PackageInstaller 会话安装：比 ACTION_VIEW 更可靠（不受个别 ROM 的“打开文件”拦截），
+     * 安装完成的回调里自动把 App 拉起来。
+     */
+    fun install(context: Context, apk: File) {
+        if (!canInstall(context)) {
+            openInstallPermission(context)
+            throw IllegalError("请先允许「红果Plus」安装应用，然后回到更新弹窗重试")
+        }
+        val ok = runCatching {
+            val installer = context.packageManager.packageInstaller
+            val params = android.content.pm.PackageInstaller.SessionParams(
+                android.content.pm.PackageInstaller.SessionParams.MODE_FULL_INSTALL
+            ).apply {
+                setAppPackageName(context.packageName)
+            }
+            val sessionId = installer.createSession(params)
+            installer.openSession(sessionId).use { session ->
+                apk.inputStream().use { input ->
+                    session.openWrite("base.apk", 0, apk.length()).use { output ->
+                        input.copyTo(output, 256 * 1024)
+                        session.fsync(output)
+                    }
+                }
+                val flags = android.app.PendingIntent.FLAG_UPDATE_CURRENT or
+                    (if (android.os.Build.VERSION.SDK_INT >= 31) android.app.PendingIntent.FLAG_MUTABLE else 0)
+                val intent = Intent(context, InstallResultReceiver::class.java).setPackage(context.packageName)
+                val pending = android.app.PendingIntent.getBroadcast(
+                    context, sessionId, intent,
+                    flags
+                )
+                session.commit(pending.intentSender)
+            }
+        }.isSuccess
+
+        if (!ok) {
+            // 兜底：老路拉起系统安装器
+            val uri: Uri = FileProvider.getUriForFile(context, "${context.packageName}.updates", apk)
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "application/vnd.android.package-archive")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+        }
+    }
+
+    /** 国内直连 github.com 经常被墙：按顺序尝试多个加速镜像。 */
+    private fun mirrors(url: String): List<String> = listOf(
+        url,
+        "https://ghfast.top/$url",
+        "https://gh-proxy.com/$url",
+        "https://v6.gh-proxy.org/$url",
+        "https://ghproxy.net/$url"
+    )
+
+    private fun fetchTo(url: String, target: File, startBytes: Long, release: Release, onProgress: (Int) -> Unit): Long {
+        val builder = Request.Builder().url(url).header("User-Agent", "HongguoPlus")
+        if (startBytes > 0) builder.header("Range", "bytes=$startBytes-")
+        http.newCall(builder.build()).execute().use { response ->
+            if (!response.isSuccessful) throw IllegalError("HTTP ${response.code}")
+            val resuming = startBytes > 0 && response.code == 206
+            var have = if (resuming) startBytes else 0L
+            val body = response.body ?: throw IllegalError("空响应")
+            val total = (body.contentLength() + have).takeIf { it > 0 } ?: release.size
+            body.byteStream().use { input ->
+                java.io.FileOutputStream(target, resuming).use { output ->
+                    val buffer = ByteArray(256 * 1024)
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        output.write(buffer, 0, read)
+                        have += read
+                        if (total > 0) onProgress(((have * 100) / total).toInt().coerceIn(0, 100))
+                    }
+                }
+            }
+            return have
+        }
+    }
+
+    /** 下载（断点续传 + 多镜像重试）：国内直连失败时自动换加速线。 */
+    private fun downloadResume(context: Context, release: Release, onProgress: (Int) -> Unit): File {
+        val dir = File(context.cacheDir, "updates").apply { mkdirs() }
+        val target = File(dir, "HongguoPlus-${release.version}.apk")
+        if (target.exists() && release.size > 0 && target.length() == release.size) return target
+
+        var lastError: Throwable? = null
+        for (url in mirrors(release.apkUrl)) {
+            val have = if (target.exists()) target.length() else 0L
+            if (release.size > 0 && have == release.size) return target
+            runCatching { fetchTo(url, target, have, release, onProgress) }
+                .onSuccess {
+                    if (release.size <= 0 || target.length() == release.size) return target
+                }
+                .onFailure { lastError = it }
+        }
+        target.delete()
+        throw IllegalError("下载失败：${lastError?.message ?: "网络不可达"}（已尝试镜像，可点「浏览器打开」手动下载）")
     }
 
     class IllegalError(message: String) : Exception(message)
