@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -61,9 +62,23 @@ fun MineScreen(onOpen: (Series) -> Unit, onLogin: () -> Unit, onSettings: () -> 
     var unfinished by remember { mutableStateOf<List<UnfinishedItem>?>(null) }
     var cloudError by remember { mutableStateOf<String?>(null) }
     var nickname by remember(refresh) { mutableStateOf(Graph.account.nickname) }
+    var profile by remember { mutableStateOf<com.hongguotv.core.CloudProfile?>(null) }
     val loggedIn = remember(refresh) { Graph.account.isLoggedIn() }
     val favorites = remember(refresh) { Graph.library.favorites() }
     val history = remember(refresh) { Graph.library.history() }
+
+    LaunchedEffect(refresh, loggedIn) {
+        if (!loggedIn) {
+            profile = null
+            return@LaunchedEffect
+        }
+        withContext(Dispatchers.IO) {
+            runCatching { Graph.account.profile() }.onSuccess {
+                profile = it
+                nickname = it.nickname.ifBlank { nickname }
+            }
+        }
+    }
 
     LaunchedEffect(refresh) {
         withContext(Dispatchers.IO) {
@@ -89,83 +104,165 @@ fun MineScreen(onOpen: (Series) -> Unit, onLogin: () -> Unit, onSettings: () -> 
     }
 
     Column(Modifier.fillMaxSize()) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(
-                    if (loggedIn) (nickname.ifBlank { "已登录" }) else "未登录",
-                    color = PlusColors.Text,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    if (loggedIn) "红果账号已连接 · 进度可同步" else "登录红果账号，自动找出你没看完的剧",
-                    color = PlusColors.SubText,
-                    fontSize = 11.sp,
-                    modifier = Modifier.padding(top = 3.dp)
-                )
-            }
-            Box(
-                Modifier
-                    .size(34.dp)
-                    .clip(CircleShape)
-                    .background(PlusColors.SurfaceHigh)
-                    .clickable { onSettings() },
-                contentAlignment = Alignment.Center
-            ) {
-                Text("⚙", color = PlusColors.Text, fontSize = 15.sp)
-            }
-            androidx.compose.foundation.layout.Spacer(Modifier.size(8.dp))
-            Box(
-                Modifier
-                    .clip(RoundedCornerShape(50))
-                    .background(PlusColors.SurfaceHigh)
-                    .clickable {
-                        if (loggedIn) {
-                            Graph.account.clear()
-                            refresh++
-                            cloudRefresh++
-                        } else {
-                            onLogin()
-                        }
-                    }
-                    .padding(horizontal = 14.dp, vertical = 8.dp)
-            ) {
-                Text(
-                    if (loggedIn) "退出" else "登录",
-                    color = if (loggedIn) PlusColors.SubText else PlusColors.Accent,
-                    fontSize = 12.sp
-                )
-            }
-        }
-
-        Row(
-            modifier = Modifier
+        // ── 账号卡片 ────────────────────────────────────────────
+        Column(
+            Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 14.dp)
-                .clip(RoundedCornerShape(12.dp))
+                .padding(top = 14.dp)
+                .clip(RoundedCornerShape(18.dp))
                 .background(PlusColors.Surface)
-                .clickable { onSettings() }
-                .padding(horizontal = 14.dp, vertical = 11.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .padding(16.dp)
         ) {
-            Column(Modifier.weight(1f)) {
-                Text("设置与自检", color = PlusColors.Text, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                Text(
-                    "账号信息 · 播放链路自检 · 检查更新",
-                    color = PlusColors.SubText,
-                    fontSize = 10.sp,
-                    modifier = Modifier.padding(top = 2.dp)
-                )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    Modifier
+                        .size(56.dp)
+                        .clip(CircleShape)
+                        .background(PlusColors.SurfaceHigh),
+                    contentAlignment = Alignment.Center
+                ) {
+                    val avatar = profile?.avatarUrl.orEmpty()
+                    if (avatar.isNotBlank()) {
+                        AsyncImage(
+                            model = avatar,
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize().clip(CircleShape)
+                        )
+                    } else {
+                        Text(
+                            (if (loggedIn) (nickname.ifBlank { "红" }) else "未").take(1),
+                            color = PlusColors.Gold,
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+                Spacer(Modifier.width(14.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        if (loggedIn) nickname.ifBlank { profile?.nickname?.ifBlank { "红果用户" } ?: "红果用户" } else "未登录",
+                        color = PlusColors.Text,
+                        fontSize = 19.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        if (loggedIn) "UID ${profile?.id?.ifBlank { "—" } ?: "—"}" else "登录后可同步进度、收藏与未看完",
+                        color = PlusColors.SubText,
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            Modifier
+                                .size(6.dp)
+                                .clip(CircleShape)
+                                .background(if (loggedIn) Color(0xFF49C86B) else Color(0xFF7A7A7A))
+                        )
+                        Spacer(Modifier.width(5.dp))
+                        Text(
+                            if (loggedIn) "红果账号已连接 · 进度可同步" else "本地模式 · 数据只存本机",
+                            color = PlusColors.SubText,
+                            fontSize = 10.sp
+                        )
+                    }
+                }
+                Box(
+                    Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .background(PlusColors.SurfaceHigh)
+                        .clickable { onSettings() },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("⚙", color = PlusColors.Text, fontSize = 15.sp)
+                }
             }
-            Text("›", color = PlusColors.SubText, fontSize = 16.sp)
+
+            Spacer(Modifier.height(16.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                listOf(
+                    Triple("收藏", favorites.size, 0),
+                    Triple("历史", history.size, 1),
+                    Triple("没看完", unfinished?.size ?: 0, 2)
+                ).forEach { (label, count, target) ->
+                    Column(
+                        Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(if (tab == target) PlusColors.SurfaceHigh else Color(0x14FFFFFF))
+                            .clickable { tab = target }
+                            .padding(vertical = 10.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            "$count",
+                            color = if (tab == target) PlusColors.Accent else PlusColors.Text,
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(label, color = PlusColors.SubText, fontSize = 10.sp)
+                    }
+                }
+            }
+
+            if (loggedIn) {
+                Spacer(Modifier.height(12.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "退出登录",
+                        color = PlusColors.SubText,
+                        fontSize = 11.sp,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .clickable {
+                                Graph.account.clear()
+                                profile = null
+                                refresh++
+                                cloudRefresh++
+                            }
+                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                    )
+                    Text(
+                        "设置与自检",
+                        color = PlusColors.SubText,
+                        fontSize = 11.sp,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .clickable { onSettings() }
+                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                    )
+                    Spacer(Modifier.weight(1f))
+                    cloudError?.let {
+                        Text(it, color = PlusColors.Accent, fontSize = 10.sp)
+                    }
+                }
+            } else {
+                Spacer(Modifier.height(12.dp))
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(50))
+                        .background(PlusColors.Accent)
+                        .clickable { onLogin() }
+                        .padding(vertical = 11.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("登录红果账号", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                }
+            }
         }
-        Spacer(Modifier.height(10.dp))
+
+        Spacer(Modifier.height(12.dp))
 
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
