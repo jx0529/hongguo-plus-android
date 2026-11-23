@@ -19,6 +19,7 @@ class VideoDataSource(
     private var buffer=byteArrayOf()
     private var offset=0
     private var opened=false
+    private var firstRead=true
     private var uri: Uri?=null
 
     override fun open(spec: DataSpec): Long {
@@ -35,6 +36,7 @@ class VideoDataSource(
         }
         buffer=byteArrayOf()
         offset=0
+        firstRead=true
         opened=true
         transferStarted(spec)
         return remaining
@@ -47,7 +49,10 @@ class VideoDataSource(
         }
         if(remaining<=0L) return C.RESULT_END_OF_INPUT
         if(offset>=buffer.size) {
-            val request=minOf(512L*1024L,remaining).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+            // 首次只要 96KB，够解码器出第一帧即可，减少首帧等待；后续一次 768KB 提高吞吐
+            val chunk = if (firstRead) 96L * 1024L else 768L * 1024L
+            firstRead = false
+            val request=minOf(chunk,remaining).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
             buffer=video.read(position,request)
             offset=0
         }

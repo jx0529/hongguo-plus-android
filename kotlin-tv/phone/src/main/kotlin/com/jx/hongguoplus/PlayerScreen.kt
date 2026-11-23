@@ -118,7 +118,20 @@ fun PlayerScreen(
     var isPlaying by remember { mutableStateOf(true) }
 
     val player = remember {
-        ExoPlayer.Builder(context).build().apply { playWhenReady = true }
+        ExoPlayer.Builder(context)
+            // 起播门槛压到 300ms、追帧 500ms：换集/开播几乎是点了就出画面
+            .setLoadControl(
+                androidx.media3.exoplayer.DefaultLoadControl.Builder()
+                    .setBufferDurationsMs(
+                        /* minBufferMs = */ 12_000,
+                        /* maxBufferMs = */ 45_000,
+                        /* bufferForPlaybackMs = */ 300,
+                        /* bufferForPlaybackAfterRebufferMs = */ 500
+                    )
+                    .setPrioritizeTimeOverSizeThresholds(true)
+                    .build()
+            )
+            .build().apply { playWhenReady = true }
     }
     var remote by remember { mutableStateOf<RemoteVideo?>(null) }
     // 上下各 5 集预取池：滑到哪集直接从池里取，不再等取流
@@ -207,7 +220,7 @@ fun PlayerScreen(
         var lastWindowStart = -1L
         while (true) {
             val total = duration.coerceAtLeast(1L)
-            val start = ((position / 30_000L) * 30_000L)
+            val start = ((position / 20_000L) * 20_000L)
             if (start != lastWindowStart) {
                 val fetched = withContext(Dispatchers.IO) {
                     runCatching {
@@ -219,7 +232,7 @@ fun PlayerScreen(
                 }
                 lastWindowStart = start
             }
-            delay(12_000)
+            delay(8_000)
         }
     }
 
