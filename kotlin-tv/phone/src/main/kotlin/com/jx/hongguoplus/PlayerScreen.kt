@@ -96,6 +96,8 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.dash.DashMediaSource
+import androidx.media3.exoplayer.source.MergingMediaSource
+import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
@@ -138,6 +140,8 @@ fun PlayerScreen(
     var duration by remember { mutableLongStateOf(0L) }
     var isPlaying by remember { mutableStateOf(true) }
     var routeHint by remember { mutableStateOf("") }
+    var sitePlan by remember { mutableStateOf<SiteDash.Plan?>(null) }
+    var siteFallback by remember { mutableIntStateOf(0) }
 
     val player = remember {
         ExoPlayer.Builder(context)
@@ -258,6 +262,8 @@ fun PlayerScreen(
     LaunchedEffect(index, quality) {
         loading = true
         error = null
+        sitePlan = null
+        siteFallback = 0
         startAt = SystemClock.uptimeMillis()
         startLatency = -1
         val reusable = pool.remove(index)
@@ -308,6 +314,7 @@ fun PlayerScreen(
                         .getOrNull()
                 }
                 if (plan != null) {
+                    sitePlan = plan
                     routeHint = "站点直连 ${plan.quality}"
                     startWith(
                         DashMediaSource.Factory(DefaultDataSource.Factory(context))
@@ -443,9 +450,48 @@ fun PlayerScreen(
             }
 
             override fun onPlayerError(playbackError: androidx.media3.common.PlaybackException) {
+                // 站点直连的 DASH 在部分机型上会抛 Unexpected runtime error：
+                // 先自动降级成「视频/音频两路 progressive 拼接」再试一次，成功后不再报错。
+                val plan = sitePlan
+                if (plan != null && siteFallback == 0) {
+                    siteFallback = 1
+                    runCatching {
+                        val factory = DefaultHttpDataSource.Factory()
+                            .setUserAgent(SiteSession.UA)
+                            .setDefaultRequestProperties(
+                                mapOf("Referer" to "${SiteSession.SITE}/")
+                            )
+                        val video = ProgressiveMediaSource.Factory(factory)
+                            .createMediaSource(
+                                MediaItem.Builder()
+                                    .setUri(plan.video)
+                                    .setMimeType(MimeTypes.VIDEO_MP4)
+                                    .build()
+                            )
+                        val audio = ProgressiveMediaSource.Factory(factory)
+                            .createMediaSource(
+                                MediaItem.Builder()
+                                    .setUri(plan.audio)
+                                    .setMimeType(MimeTypes.AUDIO_MP4)
+                                    .build()
+                            )
+                        player.setMediaSource(MergingMediaSource(video, audio), true)
+                        player.prepare()
+                        player.playWhenReady = true
+                        return
+                    }.onFailure { siteFallback = 2 }
+                }
                 runCatching { Streams.evict(episodeIds[index], quality) }
                 loading = false
-                error = "播放失败（${playbackError.errorCodeName}）：${playbackError.message ?: "解码器或片源异常"}"
+                val root = playbackError.cause
+                error = buildString {
+                    append("播放失败（").append(playbackError.errorCodeName).append("）：")
+                    append(playbackError.message ?: "解码器或片源异常")
+                    if (root != null) {
+                        append("\n原因：").append(root.javaClass.simpleName)
+                        root.message?.take(160)?.let { append("：").append(it) }
+                    }
+                }
             }
 
             // 真正画出第一帧才收掉 loading，否则会出现“黑屏但没提示”的错觉

@@ -19,6 +19,9 @@ object SiteSession {
     private const val FILE = "hongguoplus_site"
     private const val KEY = "cookie"
 
+    const val UA =
+        "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36"
+
     private fun prefs(context: Context) = context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
 
     fun cookie(context: Context = Graph.appContext): String =
