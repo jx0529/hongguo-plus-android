@@ -87,8 +87,18 @@ fun MineScreen(onOpen: (Series) -> Unit, onLogin: () -> Unit, onSettings: () -> 
     }
 
     LaunchedEffect(cloudRefresh, loggedIn) {
+        val local = Graph.library.history()
+            .filter { it.episodeCount > 0 }
+            .map {
+                UnfinishedItem(
+                    it.series,
+                    it.episodeIndex,
+                    it.episodeCount,
+                    (((it.episodeIndex + 1).toFloat() / it.episodeCount) * 100).toInt().coerceIn(1, 100)
+                )
+            }
         if (!loggedIn) {
-            unfinished = emptyList()
+            unfinished = local
             return@LaunchedEffect
         }
         cloudError = null
@@ -96,9 +106,12 @@ fun MineScreen(onOpen: (Series) -> Unit, onLogin: () -> Unit, onSettings: () -> 
         val result = withContext(Dispatchers.IO) {
             runCatching { mergeCloudProgress(Graph.account.progress()) }
         }
-        result.onSuccess { unfinished = it }.onFailure {
+        result.onSuccess { cloud ->
+            val cloudIds = cloud.map { it.series.id }.toSet()
+            unfinished = cloud + local.filterNot { it.series.id in cloudIds }
+        }.onFailure {
             cloudError = it.message ?: "云端进度加载失败"
-            unfinished = emptyList()
+            unfinished = local
         }
         refresh++
     }

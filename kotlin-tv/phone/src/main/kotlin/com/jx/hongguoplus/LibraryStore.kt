@@ -68,7 +68,7 @@ class LibraryStore(context: Context) {
 
     fun historyOf(id: String): HistoryEntry? = history().firstOrNull { it.series.id == id }
 
-    fun putHistory(series: Series, episodeIndex: Int, episodeCount: Int, positionMs: Long = 0L) {
+    fun putHistory(series: Series, episodeIndex: Int, episodeCount: Int, positionMs: Long) {
         val list = history().filterNot { it.series.id == series.id }.toMutableList()
         list.add(
             0,

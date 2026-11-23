@@ -238,7 +238,7 @@ fun PlayerScreen(
             runCatching { nextPreview?.close() }
             pool.values.forEach { runCatching { it.close() } }
             pool.clear()
-            runCatching { Graph.library.putHistory(series, index, episodeIds.size) }
+            runCatching { Graph.library.putProgress(series, index, episodeIds.size, position) }
             runCatching { player.release() }
             runCatching { remote?.close() }
         }
@@ -389,7 +389,12 @@ fun PlayerScreen(
                     }
                 }
                 if (playbackState == Player.STATE_ENDED) {
-                    runCatching { Graph.library.putHistory(series, index, episodeIds.size) }
+                    // 这一集看完了：按整集时长记进度，别把已看完的集清成第 0 秒
+                    val whole = duration.takeIf { it > 0L } ?: runCatching { player.duration }.getOrDefault(0L)
+                    runCatching { Graph.library.putProgress(series, index, episodeIds.size, whole) }
+                    runCatching {
+                        Graph.account.uploadProgress(series.id, episodeIds[index], index, whole, whole, episodeIds.size)
+                    }
                     if (index < episodeIds.lastIndex) {
                         index += 1
                     } else {
@@ -437,6 +442,11 @@ fun PlayerScreen(
                 lastSaved = System.currentTimeMillis()
                 runCatching {
                     Graph.library.putProgress(series, index, episodeIds.size, position)
+                }
+                if (System.currentTimeMillis() % 30_000L < 500L) {
+                    runCatching {
+                        Graph.account.uploadProgress(series.id, episodeIds[index], index, position, duration, episodeIds.size)
+                    }
                 }
             }
             delay(400)
@@ -787,6 +797,9 @@ fun PlayerScreen(
                         fontSize = 26.sp,
                         modifier = Modifier.clickable {
                             runCatching { Graph.library.putProgress(series, index, episodeIds.size, position) }
+                            runCatching {
+                                Graph.account.uploadProgress(series.id, episodeIds[index], index, position, duration, episodeIds.size)
+                            }
                             onClose()
                         }
                     )

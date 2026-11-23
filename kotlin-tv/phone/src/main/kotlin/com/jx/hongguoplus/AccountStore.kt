@@ -94,11 +94,30 @@ data class UnfinishedItem(
 fun mergeCloudProgress(items: List<CloudProgress>): List<UnfinishedItem> =
     items.mapNotNull { item ->
         if (item.series.id.isBlank() || item.duration <= 0L) return@mapNotNull null
-        val ratio = (item.position.toFloat() / item.duration.toFloat()).coerceIn(0f, 1f)
+        val local = Graph.library.historyOf(item.series.id)
+        if (local == null) {
+            Graph.library.putHistory(
+                series = item.series,
+                episodeIndex = item.episodeIndex,
+                episodeCount = item.episodeCount,
+                positionMs = item.position
+            )
+            val ratio = (item.position.toFloat() / item.duration.toFloat()).coerceIn(0f, 1f)
+            return@mapNotNull UnfinishedItem(item.series, item.episodeIndex, item.episodeCount, (ratio * 100).toInt())
+        }
+        // 本机进度更新（集数更靠后）就以本机为准，云端只用来补缺
+        if (local.episodeIndex >= item.episodeIndex) {
+            val percent = if (local.episodeCount > 0) {
+                (((local.episodeIndex + 1).toFloat() / local.episodeCount) * 100).toInt().coerceIn(1, 100)
+            } else 0
+            return@mapNotNull UnfinishedItem(local.series, local.episodeIndex, local.episodeCount, percent)
+        }
         Graph.library.putHistory(
             series = item.series,
             episodeIndex = item.episodeIndex,
-            episodeCount = item.episodeCount
+            episodeCount = item.episodeCount,
+            positionMs = item.position
         )
+        val ratio = (item.position.toFloat() / item.duration.toFloat()).coerceIn(0f, 1f)
         UnfinishedItem(item.series, item.episodeIndex, item.episodeCount, (ratio * 100).toInt())
     }
