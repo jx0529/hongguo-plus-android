@@ -116,29 +116,37 @@ object SiteDash {
         }
     }
 
-    /** 拼一份最小 MPD（单文件 + SegmentBase），转成 data: URI 交给 Media3。 */
-    fun mpdUri(plan: Plan): String {
+    /**
+     * 拼一份最小 MPD（单文件 + SegmentBase）并写到缓存目录。
+     *
+     * 之前用的是 `data:application/dash+xml;base64,...`，Media3 的 DashMediaSource 要先
+     * 从 URI 推断 MIME，data: 没有扩展名推不出来，于是 prepare 直接失败——自检能过
+     * （分段 206 正常）但播放器就是不出画面，原因就在这里。
+     */
+    fun mpdFile(plan: Plan): java.io.File {
         val mpd = buildString {
             append("""<?xml version="1.0" encoding="utf-8"?>""")
             append("""<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static" """)
-            append("""profiles="urn:mpeg:dash:profile:isoff-main:2011" """)
+            append("""profiles="urn:mpeg:dash:profile:isoff-on-demand:2011" """)
             append("""mediaPresentationDuration="${duration(plan.durationSeconds)}" minBufferTime="PT2S">""")
-            append("<Period>")
+            append("""<Period duration="${duration(plan.durationSeconds)}">""")
             append("""<AdaptationSet mimeType="video/mp4" segmentAlignment="true" startWithSAP="1">""")
             append("""<Representation id="v" bandwidth="${plan.bandwidthVideo}" """)
             append("""width="${plan.width}" height="${plan.height}" codecs="avc1.4d401f">""")
             append("<BaseURL>").append(escape(plan.video)).append("</BaseURL>")
-            append("""<SegmentBase indexRange="${plan.indexVideo}"><Initialization range="${plan.initVideo}"/></SegmentBase>""")
+            append("""<SegmentBase indexRange="${plan.indexVideo}" timescale="1000" presentationTimeOffset="0"><Initialization range="${plan.initVideo}"/></SegmentBase>""")
             append("</Representation></AdaptationSet>")
             append("""<AdaptationSet mimeType="audio/mp4" segmentAlignment="true">""")
             append("""<Representation id="a" bandwidth="${plan.bandwidthAudio}" codecs="mp4a.40.2">""")
             append("<BaseURL>").append(escape(plan.audio)).append("</BaseURL>")
-            append("""<SegmentBase indexRange="${plan.indexAudio}"><Initialization range="${plan.initAudio}"/></SegmentBase>""")
+            append("""<SegmentBase indexRange="${plan.indexAudio}" timescale="1000" presentationTimeOffset="0"><Initialization range="${plan.initAudio}"/></SegmentBase>""")
             append("</Representation></AdaptationSet>")
             append("</Period></MPD>")
         }
-        return "data:application/dash+xml;base64," +
-            Base64.encodeToString(mpd.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
+        val dir = java.io.File(Graph.appContext.cacheDir, "site-mpd").apply { mkdirs() }
+        val file = java.io.File(dir, "site-" + plan.video.hashCode() + ".mpd")
+        if (!file.exists() || file.length() < 100) file.writeText(mpd, Charsets.UTF_8)
+        return file
     }
 
     private fun duration(seconds: Double): String {

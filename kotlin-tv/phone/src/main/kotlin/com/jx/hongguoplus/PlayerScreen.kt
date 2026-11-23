@@ -311,7 +311,12 @@ fun PlayerScreen(
                     routeHint = "站点直连 ${plan.quality}"
                     startWith(
                         DashMediaSource.Factory(DefaultDataSource.Factory(context))
-                            .createMediaSource(MediaItem.fromUri(SiteDash.mpdUri(plan)))
+                            .createMediaSource(
+                                MediaItem.Builder()
+                                    .setUri(android.net.Uri.fromFile(SiteDash.mpdFile(plan)))
+                                    .setMimeType(androidx.media3.common.MimeTypes.APPLICATION_MPD)
+                                    .build()
+                            )
                     )
                     return@LaunchedEffect
                 }
