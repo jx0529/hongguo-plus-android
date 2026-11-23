@@ -26,10 +26,9 @@ object Streams {
         private set
 
     private val phoenix: PhoenixPlaybackSource by lazy {
-        PhoenixPlaybackSource(
-            Graph.http.newBuilder().cookieJar(CookieJar.NO_COOKIES).build(),
-            PhoenixPlaybackDeviceSession.shared
-        )
+        // 复用主客户端的 CookieJar：设备注册/取流需要站点的 ttwid 等 Cookie，
+        // 之前用 NO_COOKIES 会直接注册失败（PhoenixPlaybackDeviceRegistrationException）。
+        PhoenixPlaybackSource(Graph.http, PhoenixPlaybackDeviceSession.shared)
     }
 
     /** 取流结果短期缓存：同一集重复进入不再重复请求接口。 */

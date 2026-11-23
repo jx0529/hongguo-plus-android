@@ -59,7 +59,7 @@ fun DetailScreen(
     val scroll = rememberScrollState()
 
     LaunchedEffect(series.id) {
-        val result = withContext(Dispatchers.IO) { runCatching { Graph.repo.detail(series.id) } }
+        val result = withContext(Dispatchers.IO) { runCatching { ContentCache.detail(series.id) } }
         result.onSuccess { detail = it }.onFailure { error = it.message ?: "详情加载失败" }
     }
 

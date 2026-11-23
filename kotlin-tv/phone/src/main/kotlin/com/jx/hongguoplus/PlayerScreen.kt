@@ -312,7 +312,7 @@ fun PlayerScreen(
 
     // 同 IP / 上一季 / 下一季 / 同作者推荐（结局时展示）
     LaunchedEffect(series.id) {
-        val detail = withContext(Dispatchers.IO) { runCatching { Graph.repo.detail(series.id) } }.getOrNull()
+        val detail = withContext(Dispatchers.IO) { runCatching { ContentCache.detail(series.id) } }.getOrNull()
             ?: return@LaunchedEffect
         val current = seasonNumber(series.title)
         seasonList = detail.sameName

@@ -349,16 +349,29 @@ private suspend fun collectChecks(): List<CheckRow> {
 
     step("⑤ 取流接口（自动换线）") {
         if (episodeId.isBlank()) error("没有拿到剧集 ID")
-        val stream = Streams.resolve(episodeId, 1080)
-        val attempts = Streams.lastAttempts.joinToString("；") { a ->
-            "${a.route}${if (a.ok) "成功" else "失败"}=${a.detail}"
+        val attemptsText = {
+            Streams.lastAttempts.joinToString("；") { a ->
+                "${a.route}${if (a.ok) "成功" else "失败"}=${a.detail}"
+            }
         }
-        "清晰度 ${stream.quality}，地址长度 ${stream.url.length}；线路：$attempts"
+        val stream = try {
+            Streams.resolve(episodeId, 1080)
+        } catch (error: Throwable) {
+            error("${error.message ?: error::class.simpleName}｜四条线路：${attemptsText()}")
+        }
+        "清晰度 ${stream.quality}，地址长度 ${stream.url.length}；线路：${attemptsText()}"
     }
 
     step("⑥ 分段读取") {
         if (episodeId.isBlank()) error("没有拿到剧集 ID")
-        val stream = Streams.resolve(episodeId, 1080)
+        Streams.cached(episodeId, 1080)
+        val stream = try {
+            Streams.resolve(episodeId, 1080)
+        } catch (error: Throwable) {
+            error("${error.message ?: error::class.simpleName}｜四条线路：${
+                Streams.lastAttempts.joinToString("；") { a -> "${a.route}${if (a.ok) "成功" else "失败"}=${a.detail}" }
+            }")
+        }
         RemoteVideo(Graph.http, stream).use { remote ->
             remote.prepare()
             val head = remote.read(0, 1024 * 1024)
