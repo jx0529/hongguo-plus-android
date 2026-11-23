@@ -1,1 +1,1 @@
-{"version": "1.3.6", "versionCode": 24, "size": 16147106, "url": "https://gh-proxy.com/https://github.com/jx0529/hongguo-plus-android/releases/download/v1.3.6/HongguoPlus-1.3.6.apk", "notes": "回退播放分块到 1.2.6 参数；loading 首帧后收起；播放错误显式提示"}
+{"version": "1.3.7", "versionCode": 25, "size": 16163490, "url": "https://gh-proxy.com/https://github.com/jx0529/hongguo-plus-android/releases/download/v1.3.7/HongguoPlus-1.3.7.apk", "notes": "片源与封面本地缓存、搜索记录、设置入口、凭证加密、点按暂停"}
