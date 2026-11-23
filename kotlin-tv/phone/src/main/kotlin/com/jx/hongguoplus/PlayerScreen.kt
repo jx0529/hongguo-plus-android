@@ -166,6 +166,7 @@ fun PlayerScreen(
     var clock by remember { mutableStateOf("") }
     var batteryPct by remember { mutableIntStateOf(-1) }
     var startLatency by remember { mutableIntStateOf(-1) }
+    var slowLoad by remember { mutableStateOf(false) }
     var startAt by remember { mutableLongStateOf(0L) }
     var charging by remember { mutableStateOf(false) }
     val drag = remember { Animatable(0f) }
@@ -253,11 +254,7 @@ fun PlayerScreen(
             withContext(Dispatchers.IO) {
                 runCatching {
                     val info = Streams.resolve(episodeIds[index], quality)
-                    RemoteVideo(
-                        Graph.http, info,
-                        chunkBytes = 512 * 1024,
-                        aheadBytes = 12L * 1024 * 1024
-                    ).prepare()
+                    RemoteVideo(Graph.http, info).prepare()
                 }
             }
         }
@@ -281,7 +278,7 @@ fun PlayerScreen(
             }
             player.playWhenReady = true
             runCatching { Graph.library.putHistory(series, index, episodeIds.size) }
-            loading = false
+            // loading 由首帧回调收起，避免"黑屏但没有任何提示"
         }.onFailure {
             loading = false
             error = it.message ?: "取流失败，稍后再试"
@@ -344,11 +341,7 @@ fun PlayerScreen(
                         if (pool.containsKey(target)) return@withPermit
                         val video = runCatching {
                             val info = Streams.resolve(episodeIds[target], quality)
-                            RemoteVideo(
-                                Graph.http, info,
-                                chunkBytes = 512 * 1024,
-                                aheadBytes = 1L * 1024 * 1024
-                            ).prepare()
+                            RemoteVideo(Graph.http, info).prepare()
                         }.getOrNull()
                         if (video != null) {
                             if (pool.size < 2 && !pool.containsKey(target)) pool[target] = video
@@ -392,6 +385,11 @@ fun PlayerScreen(
                         ending = true
                     }
                 }
+            }
+
+            override fun onPlayerError(playbackError: androidx.media3.common.PlaybackException) {
+                loading = false
+                error = "播放失败（${playbackError.errorCodeName}）：${playbackError.message ?: "解码器或片源异常"}"
             }
 
             // 真正画出第一帧才收掉 loading，否则会出现“黑屏但没提示”的错觉
@@ -467,6 +465,14 @@ fun PlayerScreen(
         swipeHint = "第 ${index + 1} 集"
         delay(1100)
         swipeHint = null
+    }
+
+    LaunchedEffect(index, quality, loading) {
+        slowLoad = false
+        if (loading) {
+            delay(6000)
+            if (loading) slowLoad = true
+        }
     }
 
     LaunchedEffect(showControls, isPlaying, loading) {
@@ -705,7 +711,7 @@ fun PlayerScreen(
                     )
                     Spacer(Modifier.height(10.dp))
                     Text(
-                        "第 ${index + 1} 集 取流中…",
+                        if (slowLoad) "加载较慢，正在拉取片源…可切 720p 或点重试" else "第 ${index + 1} 集 取流中…",
                         color = Color(0xFFBBBBBB),
                         fontSize = 12.sp
                     )
