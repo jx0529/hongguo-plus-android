@@ -31,6 +31,12 @@ object Streams {
         PhoenixPlaybackSource(Graph.http, PhoenixPlaybackDeviceSession.shared)
     }
 
+    /**
+     * 取流接口一次只允许一个在跑：并发打多了红果会直接回空响应
+     * （自检里看到的 EmptyPlaybackResponseException 多由此触发）。
+     */
+    private val networkGate = java.util.concurrent.locks.ReentrantLock()
+
     /** 取流结果短期缓存：同一集重复进入不再重复请求接口。 */
     private val cache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, StreamInfo>>()
     private const val CACHE_MS = 8 * 60 * 1000L
@@ -46,6 +52,16 @@ object Streams {
     }
 
     private fun resolveFresh(id: String, maxQuality: Int): StreamInfo {
+        networkGate.lock()
+        try {
+            cached(id, maxQuality)?.let { return it }
+            return resolveFreshLocked(id, maxQuality)
+        } finally {
+            networkGate.unlock()
+        }
+    }
+
+    private fun resolveFreshLocked(id: String, maxQuality: Int): StreamInfo {
         val attempts = mutableListOf<Attempt>()
         val errors = mutableListOf<Throwable>()
 

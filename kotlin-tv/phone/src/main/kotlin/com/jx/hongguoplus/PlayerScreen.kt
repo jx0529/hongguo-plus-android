@@ -327,15 +327,15 @@ fun PlayerScreen(
         current // 保留 current 参与计算，避免误用
     }
 
-    // 预取：当前集就绪后，后台把「上 5 集 + 下 5 集」依次准备好（2 路并发），滑动换集秒开
+    // 预取：只准备「上一集 + 下一集」，且串行执行——预取太多会把带宽和取流接口挤爆，反而拖慢当前这集
     LaunchedEffect(index, quality, loading) {
         if (loading) return@LaunchedEffect
         prefetchJob?.cancel()
         prefetchJob = launch {
-            delay(2000)
-            val targets = (1..3).flatMap { listOf(index + it, index - it) }
+            delay(3500)
+            val targets = listOf(index + 1, index - 1)
                 .filter { it in episodeIds.indices && it != index }
-            val gate = Semaphore(2)
+            val gate = Semaphore(1)
             targets.forEach { target ->
                 launch(Dispatchers.IO) {
                     gate.withPermit {
@@ -345,11 +345,11 @@ fun PlayerScreen(
                             RemoteVideo(
                                 Graph.http, info,
                                 chunkBytes = 512 * 1024,
-                                aheadBytes = 2L * 1024 * 1024
+                                aheadBytes = 1L * 1024 * 1024
                             ).prepare()
                         }.getOrNull()
                         if (video != null) {
-                            if (pool.size < 8 && !pool.containsKey(target)) pool[target] = video
+                            if (pool.size < 2 && !pool.containsKey(target)) pool[target] = video
                             else runCatching { video.close() }
                         }
                     }
@@ -366,9 +366,9 @@ fun PlayerScreen(
         nextPreview = null
     }
 
-    // 滑远之后，把池子里超出 ±6 集的实例关掉，避免占着连接
+    // 滑远之后，把池子里超出 ±2 集的实例关掉，避免占着连接
     LaunchedEffect(index) {
-        pool.keys.filter { kotlin.math.abs(it - index) > 4 }.forEach { key ->
+        pool.keys.filter { kotlin.math.abs(it - index) > 2 }.forEach { key ->
             runCatching { pool.remove(key)?.close() }
         }
     }

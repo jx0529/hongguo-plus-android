@@ -35,6 +35,12 @@ object Updater {
             .build()
     }
 
+    /** 最近一次检查的诊断信息（界面上直接显示，便于判断是"真最新"还是"查不到"）。 */
+    @Volatile
+    var lastReport: String = ""
+
+    private fun report(text: String) { lastReport = text }
+
     /** 阻塞调用，请在 IO 线程执行。返回 null 表示已是最新或检查失败。 */
     fun check(currentVersion: String): Release? = checkDetailed(currentVersion).getOrNull()
 
@@ -43,25 +49,56 @@ object Updater {
      * CDN 清单能读到就以其为准；读不到才回退 GitHub API，仍失败则抛出真实错误。
      */
     fun checkDetailed(currentVersion: String): Result<Release?> = runCatching {
+        val notes = mutableListOf<String>()
         val direct = runCatching { fetch(currentVersion) }
-        if (direct.isSuccess) return@runCatching direct.getOrNull()
+        direct.onSuccess { rel ->
+            report(if (rel == null) "GitHub 接口正常：已是最新" else "GitHub 接口正常：发现 ${rel.version}")
+            return@runCatching rel
+        }.onFailure { error ->
+            notes += "GitHub 接口失败：${error.message ?: error::class.simpleName}"
+        }
         val cdn = runCatching { fetchFromCdn(currentVersion) }
-        if (cdn.isSuccess) return@runCatching cdn.getOrNull()
+        cdn.onSuccess { rel ->
+            report(
+                (if (rel == null) "CDN 清单正常：已是最新" else "CDN 清单正常：发现 ${rel.version}") +
+                    if (notes.isEmpty()) "" else "（${notes.joinToString("；")}）"
+            )
+            return@runCatching rel
+        }.onFailure { error ->
+            notes += "CDN 清单失败：${error.message ?: error::class.simpleName}"
+        }
+        report(notes.joinToString("；"))
         throw direct.exceptionOrNull() ?: java.io.IOException("更新服务器不可达")
     }
 
     /** 先从 CDN 上的更新清单取：一条小 JSON，国内基本不受墙影响。 */
     private fun fetchFromCdn(currentVersion: String): Release? {
-        val url = "$CDN_MANIFEST?t=${System.currentTimeMillis() / 3600_000L}"
+        var lastError: Throwable? = null
+        for (url in listOf(
+            "https://gh-proxy.com/https://raw.githubusercontent.com/jx0529/hongguo-plus-android/dist/latest.json",
+            "https://v6.gh-proxy.org/https://raw.githubusercontent.com/jx0529/hongguo-plus-android/dist/latest.json",
+            CDN_MANIFEST
+        )) {
+            try {
+                return fetchManifest(url, currentVersion)
+            } catch (t: Throwable) {
+                lastError = t
+            }
+        }
+        throw lastError ?: java.io.IOException("更新清单不可达")
+    }
+
+    private fun fetchManifest(base: String, currentVersion: String): Release? {
+        val url = "$base?t=${System.currentTimeMillis()}"
         val request = Request.Builder()
             .url(url)
             .header("User-Agent", "HongguoPlus")
             .header("Cache-Control", "no-cache")
             .build()
         return http.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) return null
+            if (!response.isSuccessful) throw IllegalError("HTTP ${response.code}（$base）")
             val body = response.body?.string().orEmpty()
-            if (body.isBlank()) return null
+            if (body.isBlank()) throw IllegalError("空清单（$base）")
             val json = JSONObject(body)
             val version = json.optString("version").removePrefix("v")
             if (version.isBlank() || !isNewer(version, currentVersion)) return null
@@ -102,14 +139,15 @@ object Updater {
             .header("User-Agent", "HongguoPlus")
             .build()
         return http.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) return null
+            if (!response.isSuccessful) throw IllegalError("HTTP ${response.code}（$url）")
             val body = response.body?.string().orEmpty()
-            if (body.isBlank()) return null
+            if (body.isBlank()) throw IllegalError("空响应（$url）")
             val json = JSONObject(body)
             val tag = json.optString("tag_name")
+            if (tag.isBlank()) throw IllegalError("返回里没有 tag_name（$url）")
             val version = tag.removePrefix("v").removePrefix("V")
             if (version.isBlank() || !isNewer(version, currentVersion)) return null
-            val assets = json.optJSONArray("assets") ?: return null
+            val assets = json.optJSONArray("assets") ?: throw IllegalError("发行里没有 assets（$url）")
             var url = ""
             var size = 0L
             for (i in 0 until assets.length()) {

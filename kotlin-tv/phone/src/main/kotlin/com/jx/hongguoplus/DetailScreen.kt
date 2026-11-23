@@ -69,11 +69,11 @@ fun DetailScreen(
         if (list.isEmpty()) return@LaunchedEffect
         val quality = Graph.library.defaultQuality
         withContext(Dispatchers.IO) {
-            list.take(2).forEach { id ->
+            list.take(1).forEach { id ->
                 launch {
                     runCatching {
                         val info = Streams.resolve(id, quality)
-                        PrewarmPool.put(id, quality, RemoteVideo(Graph.http, info, chunkBytes = 512 * 1024, aheadBytes = 2L * 1024 * 1024).prepare())
+                        PrewarmPool.put(id, quality, RemoteVideo(Graph.http, info, chunkBytes = 512 * 1024, aheadBytes = 1L * 1024 * 1024).prepare())
                     }
                 }
             }

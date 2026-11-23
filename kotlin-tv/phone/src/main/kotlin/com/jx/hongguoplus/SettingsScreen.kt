@@ -237,6 +237,10 @@ fun SettingsScreen(onBack: () -> Unit, onLogin: () -> Unit, onRefreshMine: () ->
                         color = PlusColors.SubText, fontSize = 11.sp, lineHeight = 16.sp
                     )
                 }
+                if (updateChecked && Updater.lastReport.isNotBlank()) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(Updater.lastReport, color = PlusColors.SubText, fontSize = 10.sp, lineHeight = 15.sp)
+                }
                 updateError?.let {
                     Spacer(Modifier.height(8.dp))
                     Text(it, color = PlusColors.Accent, fontSize = 11.sp)
@@ -291,7 +295,8 @@ fun SettingsScreen(onBack: () -> Unit, onLogin: () -> Unit, onRefreshMine: () ->
                 }
                 Spacer(Modifier.height(10.dp))
                 Text(
-                    if (updateChecked && latest == null && updateError == null) "已是最新版本（$version）"
+                    if (updateChecked && latest == null && updateError == null)
+                        "已是最新版本（$version）· ${Updater.lastReport.ifBlank { "—" }}"
                     else "更新包经高速 CDN 分发，可直接覆盖安装，不会丢收藏与历史。",
                     color = PlusColors.SubText, fontSize = 10.sp
                 )
