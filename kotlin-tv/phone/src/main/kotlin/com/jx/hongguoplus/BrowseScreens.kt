@@ -47,6 +47,7 @@ import com.hongguotv.core.ContentType
 import com.hongguotv.core.RankBoard
 import com.hongguotv.core.Series
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -61,6 +62,8 @@ fun TheaterScreen(onOpen: (Series) -> Unit) {
     var hasMore by remember { mutableStateOf(true) }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var autoSorted by remember { mutableStateOf(false) }
+    var pendingAuto by remember { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
 
     fun refresh(index: Int, filter: Map<String, String>, resetPage: Boolean) {
@@ -81,6 +84,22 @@ fun TheaterScreen(onOpen: (Series) -> Unit) {
                     filters = pageData.filters.take(3).map { group ->
                         group.label to group.options.take(12).map { it.id to it.label }
                     }
+                    // 首次进入剧场默认按「最新」排序，不用手动点
+                    if (!autoSorted && selected.isEmpty()) {
+                        val sortGroup = pageData.filters.firstOrNull { g ->
+                            g.label.contains("排序") || g.label.contains("sort", true)
+                        }
+                        val newest = sortGroup?.options?.firstOrNull { o ->
+                            o.label.contains("最新") || o.label.contains("上新")
+                        }
+                        if (sortGroup != null && newest != null) {
+                            autoSorted = true
+                            selected = selected + (sortGroup.label to newest.id)
+                            items = emptyList()
+                            page = 1
+                            pendingAuto++
+                        }
+                    }
                 }
             }.onFailure {
                 if (resetPage) items = emptyList()
@@ -91,6 +110,10 @@ fun TheaterScreen(onOpen: (Series) -> Unit) {
     }
 
     LaunchedEffect(typeIndex) { refresh(typeIndex, selected, true) }
+
+    LaunchedEffect(pendingAuto) {
+        if (pendingAuto > 0) refresh(typeIndex, selected, true)
+    }
 
     Column(Modifier.fillMaxSize()) {
         SectionTitle("剧场")
@@ -149,7 +172,8 @@ fun TheaterScreen(onOpen: (Series) -> Unit) {
 
 @Composable
 fun RankScreen(onOpen: (Series) -> Unit) {
-    val boards = listOf(RankBoard.TOTAL, RankBoard.REAL, RankBoard.COMIC, RankBoard.AI)
+    val appContext = androidx.compose.ui.platform.LocalContext.current.applicationContext
+    val boards = listOf(RankBoard.TOTAL, RankBoard.HOT_SEARCH, RankBoard.MUST_WATCH, RankBoard.REAL, RankBoard.COMIC, RankBoard.AI)
     var boardIndex by remember { mutableIntStateOf(0) }
     var items by remember { mutableStateOf<List<Series>>(emptyList()) }
     var page by remember { mutableIntStateOf(1) }
@@ -171,23 +195,33 @@ fun RankScreen(onOpen: (Series) -> Unit) {
                 items = if (resetPage) pageData.items else (items + pageData.items).distinctBy { it.id }
                 hasMore = pageData.hasMore
                 page = target
+                if (resetPage) RankCache.save(appContext, boards[index], pageData.items)
             }.onFailure {
-                if (resetPage) items = emptyList()
-                error = it.message ?: "榜单加载失败"
+                if (resetPage && items.isEmpty()) error = it.message ?: "榜单加载失败"
             }
             loading = false
         }
     }
 
-    LaunchedEffect(boardIndex) { refresh(boardIndex, true) }
+    // 先出本地缓存（秒开），再拉当天最新的榜单覆盖
+    LaunchedEffect(boardIndex) {
+        val context = appContext
+        val cached = RankCache.load(context, boards[boardIndex])
+        if (cached.items.isNotEmpty() && items.isEmpty()) {
+            items = cached.items
+        }
+        refresh(boardIndex, true)
+    }
 
     Column(Modifier.fillMaxSize()) {
         SectionTitle("排行榜", trailing = boards[boardIndex].sourceText)
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp),
+        androidx.compose.foundation.lazy.LazyRow(
+            modifier = Modifier.fillMaxWidth(),
+            contentPadding = PaddingValues(horizontal = 14.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            boards.forEachIndexed { index, board ->
+            items(boards.size) { index ->
+                val board = boards[index]
                 Pill(board.buttonLabel, index == boardIndex) {
                     boardIndex = index
                     items = emptyList()
@@ -285,6 +319,7 @@ fun SearchScreen(onOpen: (Series) -> Unit, onBack: () -> Unit) {
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var staged by remember { mutableStateOf("") }
+    var related by remember { mutableStateOf<List<Series>>(emptyList()) }
     val scope = rememberCoroutineScope()
 
     fun doSearch(keyword: String, resetPage: Boolean) {
@@ -311,11 +346,21 @@ fun SearchScreen(onOpen: (Series) -> Unit, onBack: () -> Unit) {
         }
     }
 
+    // 边打字边联想：关键词 + 直接相关的剧（300ms 防抖）
     LaunchedEffect(query) {
         if (query.length >= 1 && query != staged) {
-            suggestions = withContext(Dispatchers.IO) {
+            delay(300)
+            if (query == staged) return@LaunchedEffect
+            val words = withContext(Dispatchers.IO) {
                 runCatching { Graph.repo.suggest(query) }.getOrDefault(emptyList())
             }
+            suggestions = words.take(8)
+            related = if (query.length >= 2) {
+                withContext(Dispatchers.IO) {
+                    runCatching { Graph.repo.searchCombined(query, 1).items.take(6) }
+                        .getOrDefault(emptyList())
+                }
+            } else emptyList()
         }
     }
 
@@ -359,7 +404,7 @@ fun SearchScreen(onOpen: (Series) -> Unit, onBack: () -> Unit) {
                 )
             }
         }
-        if (suggestions.isNotEmpty() && items.isEmpty()) {
+        if ((suggestions.isNotEmpty() || related.isNotEmpty()) && items.isEmpty()) {
             androidx.compose.foundation.lazy.LazyColumn(
                 contentPadding = PaddingValues(horizontal = 16.dp),
                 modifier = Modifier.fillMaxWidth()
@@ -377,6 +422,59 @@ fun SearchScreen(onOpen: (Series) -> Unit, onBack: () -> Unit) {
                             }
                             .padding(vertical = 12.dp)
                     )
+                }
+                if (related.isNotEmpty()) {
+                    item {
+                        Text(
+                            "相关剧集",
+                            color = PlusColors.Text,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(top = 10.dp, bottom = 8.dp)
+                        )
+                    }
+                    items(related.size) { i ->
+                        val series = related[i]
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onOpen(series) }
+                                .padding(vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                Modifier
+                                    .size(width = 46.dp, height = 64.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(PlusColors.SurfaceHigh)
+                            ) {
+                                AsyncImage(
+                                    model = series.cover,
+                                    contentDescription = series.title,
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
+                            Column(Modifier.weight(1f).padding(start = 10.dp)) {
+                                Text(
+                                    series.title,
+                                    color = PlusColors.Text,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                if (series.badge.isNotBlank()) {
+                                    Text(
+                                        series.badge,
+                                        color = PlusColors.SubText,
+                                        fontSize = 10.sp,
+                                        modifier = Modifier.padding(top = 3.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
             }
         } else {

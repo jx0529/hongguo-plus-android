@@ -15,6 +15,11 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.layout.aspectRatio
+
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
@@ -27,6 +32,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
@@ -41,6 +47,13 @@ import kotlinx.coroutines.withContext
 
 @Composable
 fun MineScreen(onOpen: (Series) -> Unit, onLogin: () -> Unit, onSettings: () -> Unit = {}) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var gridMode by remember {
+        mutableStateOf(
+            context.getSharedPreferences("hongguoplus_ui", android.content.Context.MODE_PRIVATE)
+                .getBoolean("mine_grid", false)
+        )
+    }
     var tab by remember { mutableIntStateOf(0) }
     var refresh by remember { mutableIntStateOf(0) }
     var cloudRefresh by remember { mutableIntStateOf(0) }
@@ -135,16 +148,24 @@ fun MineScreen(onOpen: (Series) -> Unit, onLogin: () -> Unit, onSettings: () -> 
 
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
             Pill("收藏 ${favorites.size}", tab == 0) { tab = 0 }
             Pill("历史 ${history.size}", tab == 1) { tab = 1 }
             Pill("没看完", tab == 2) { tab = 2 }
+            Spacer(Modifier.weight(1f))
+            Pill(if (gridMode) "列表" else "三列") {
+                gridMode = !gridMode
+                context.getSharedPreferences("hongguoplus_ui", android.content.Context.MODE_PRIVATE)
+                    .edit().putBoolean("mine_grid", gridMode).apply()
+            }
         }
         Spacer(Modifier.height(10.dp))
 
         when (tab) {
             0 -> SeriesList(
+                grid = gridMode,
                 items = favorites,
                 emptyHint = "还没有收藏，看到喜欢的剧点个收藏",
                 subtitle = { series -> series.badge.ifBlank { "已收藏" } },
@@ -156,6 +177,7 @@ fun MineScreen(onOpen: (Series) -> Unit, onLogin: () -> Unit, onSettings: () -> 
             )
 
             1 -> SeriesList(
+                grid = gridMode,
                 items = history.map { it.series },
                 emptyHint = "还没有观看记录",
                 subtitle = { series ->
@@ -185,6 +207,62 @@ fun MineScreen(onOpen: (Series) -> Unit, onLogin: () -> Unit, onSettings: () -> 
                         onRetry = { cloudRefresh++ },
                         modifier = Modifier.fillMaxSize()
                     )
+
+                    gridMode -> LazyVerticalGrid(
+                        columns = GridCells.Fixed(3),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        items(items, key = { it.series.id }) { item ->
+                            Column {
+                                Box(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .aspectRatio(3f / 4f)
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(PlusColors.SurfaceHigh)
+                                        .clickable { onOpen(item.series) }
+                                ) {
+                                    AsyncImage(
+                                        model = item.series.cover,
+                                        contentDescription = item.series.title,
+                                        contentScale = ContentScale.Crop,
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                }
+                                Text(
+                                    item.series.title,
+                                    color = PlusColors.Text,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.padding(top = 6.dp)
+                                )
+                                Text(
+                                    "第 ${item.episodeIndex + 1} 集 · ${item.progressPercent}%",
+                                    color = PlusColors.SubText,
+                                    fontSize = 10.sp,
+                                    maxLines = 1,
+                                    modifier = Modifier.padding(top = 2.dp)
+                                )
+                            }
+                        }
+                        item {
+                            Text(
+                                "刷新云端进度",
+                                color = PlusColors.SubText,
+                                fontSize = 12.sp,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { cloudRefresh++ }
+                                    .padding(vertical = 12.dp)
+                            )
+                        }
+                    }
 
                     else -> LazyColumn(
                         contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp),
@@ -257,6 +335,7 @@ fun MineScreen(onOpen: (Series) -> Unit, onLogin: () -> Unit, onSettings: () -> 
 
 @Composable
 private fun SeriesList(
+    grid: Boolean = false,
     items: List<Series>,
     emptyHint: String,
     subtitle: (Series) -> String,
@@ -265,6 +344,113 @@ private fun SeriesList(
 ) {
     if (items.isEmpty()) {
         ErrorView(message = emptyHint, modifier = Modifier.fillMaxSize())
+        return
+    }
+    if (grid) {
+        androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
+            columns = androidx.compose.foundation.lazy.grid.GridCells.Fixed(3),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            items(items, key = { it.id }) { series ->
+                Column {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(3f / 4f)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(PlusColors.SurfaceHigh)
+                            .clickable { onOpen(series) }
+                    ) {
+                        AsyncImage(
+                            model = series.cover,
+                            contentDescription = series.title,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                    Text(
+                        series.title,
+                        color = PlusColors.Text,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 6.dp)
+                    )
+                    Text(
+                        subtitle(series),
+                        color = PlusColors.SubText,
+                        fontSize = 10.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .padding(top = 2.dp)
+                            .clickable { onRemove(series) }
+                    )
+                }
+            }
+        }
+        return
+    }
+    if (grid) {
+        LazyVerticalGrid(
+            columns = GridCells.Fixed(3),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            items(items, key = { it.id }) { series ->
+                Column {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(3f / 4f)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(PlusColors.SurfaceHigh)
+                            .clickable { onOpen(series) }
+                    ) {
+                        AsyncImage(
+                            model = series.cover,
+                            contentDescription = series.title,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                        Box(
+                            Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(4.dp)
+                                .clip(RoundedCornerShape(50))
+                                .background(Color(0x99000000))
+                                .clickable { onRemove(series) }
+                                .padding(horizontal = 7.dp, vertical = 3.dp)
+                        ) {
+                            Text("×", color = Color.White, fontSize = 10.sp)
+                        }
+                    }
+                    Text(
+                        series.title,
+                        color = PlusColors.Text,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 6.dp)
+                    )
+                    Text(
+                        subtitle(series),
+                        color = PlusColors.SubText,
+                        fontSize = 10.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
+                }
+            }
+        }
         return
     }
     LazyColumn(

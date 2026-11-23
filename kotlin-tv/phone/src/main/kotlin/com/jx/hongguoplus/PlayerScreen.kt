@@ -64,7 +64,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import android.app.Activity
+import android.content.BroadcastReceiver
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ActivityInfo
+import android.os.BatteryManager
 import android.content.res.Configuration
 import android.app.PictureInPictureParams
 import android.os.Build
@@ -156,6 +160,9 @@ fun PlayerScreen(
     var pageHeight by remember { mutableIntStateOf(0) }
     var videoAspect by remember { mutableFloatStateOf(16f / 9f) }
     var holdingSpeed by remember { mutableStateOf(false) }
+    var clock by remember { mutableStateOf("") }
+    var batteryPct by remember { mutableIntStateOf(-1) }
+    var charging by remember { mutableStateOf(false) }
     val drag = remember { Animatable(0f) }
     val uiScope = rememberCoroutineScope()
     var showDanmakuSettings by remember { mutableStateOf(false) }
@@ -172,6 +179,42 @@ fun PlayerScreen(
     val activity = context as? Activity
     val isLandscape = androidx.compose.ui.platform.LocalConfiguration.current.orientation ==
         Configuration.ORIENTATION_LANDSCAPE
+
+    // 横屏时把系统状态栏收起来（图标不压在画面上），时间/电量由播放器自己在底部那条里画
+    DisposableEffect(isLandscape) {
+        val act = context as? Activity
+        val controller = act?.let { androidx.core.view.WindowCompat.getInsetsController(it.window, it.window.decorView) }
+        val bars = androidx.core.view.WindowInsetsCompat.Type.statusBars()
+        if (controller != null) {
+            if (isLandscape) controller.hide(bars) else controller.show(bars)
+        }
+        onDispose { if (controller != null) runCatching { controller.show(bars) } }
+    }
+
+    // 时钟（横屏右上角 + 底部状态条共用）
+    LaunchedEffect(Unit) {
+        val fmt = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
+        while (true) {
+            clock = fmt.format(java.util.Date())
+            delay(20_000)
+        }
+    }
+
+    // 电量
+    DisposableEffect(Unit) {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(c: android.content.Context?, intent: Intent?) {
+                val level = intent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+                val scale = intent?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
+                if (level >= 0 && scale > 0) batteryPct = level * 100 / scale
+                val status = intent?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
+                charging = status == BatteryManager.BATTERY_STATUS_CHARGING ||
+                    status == BatteryManager.BATTERY_STATUS_FULL
+            }
+        }
+        runCatching { context.registerReceiver(receiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED)) }
+        onDispose { runCatching { context.unregisterReceiver(receiver) } }
+    }
 
     DisposableEffect(Unit) {
         runCatching {
@@ -550,6 +593,33 @@ fun PlayerScreen(
             )
         }
 
+        // 横屏：系统状态条搬到屏幕底部（时间 / 电量），顶部只留软件自己的信息
+        if (isLandscape) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal)),
+                contentAlignment = Alignment.BottomEnd
+            ) {
+                Row(
+                    modifier = Modifier.padding(end = 14.dp, bottom = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(clock, color = Color(0xCCFFFFFF), fontSize = 12.sp)
+                    Spacer(Modifier.width(10.dp))
+                    if (charging) {
+                        Text("⚡", color = Color(0xCCFFD24D), fontSize = 11.sp)
+                        Spacer(Modifier.width(3.dp))
+                    }
+                    Text(
+                        if (batteryPct in 0..100) "${batteryPct}%" else "--",
+                        color = Color(0xCCFFFFFF),
+                        fontSize = 12.sp
+                    )
+                }
+            }
+        }
+
         // 换集后的小提示（上滑/下滑的结果反馈）
         AnimatedVisibility(
             visible = swipeHint != null,
@@ -663,6 +733,15 @@ fun PlayerScreen(
                             "第 ${index + 1}/${episodeIds.size} 集 · 上滑下一集",
                             color = Color(0xFFBBBBBB),
                             fontSize = 11.sp
+                        )
+                    }
+                    // 横屏：时间放在右上角
+                    if (isLandscape) {
+                        Text(
+                            clock,
+                            color = Color(0xE6FFFFFF),
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold
                         )
                     }
                 }
