@@ -1,1 +1,1 @@
-{"version": "1.3.3", "versionCode": 21, "size": 16114338, "url": "https://gh-proxy.com/https://github.com/jx0529/hongguo-plus-android/releases/download/v1.3.3/HongguoPlus-1.3.3.apk", "notes": "修复播放设备注册失败（取流复用站点 Cookie）；自检显示四条线路详情；详情接口缓存"}
+{"version": "1.3.5", "versionCode": 23, "size": 16147106, "url": "https://gh-proxy.com/https://github.com/jx0529/hongguo-plus-android/releases/download/v1.3.5/HongguoPlus-1.3.5.apk", "notes": "竖屏播放改为抖音式界面；选集为底部圆角弹层；预取仅上下各一集"}
