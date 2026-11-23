@@ -126,7 +126,7 @@ fun PlayerScreen(
     startIndex: Int,
     onClose: () -> Unit,
     onOpenSeries: (Series) -> Unit = {},
-    onWebPlay: (String) -> Unit = {}
+    onWebPlay: (String, Int) -> Unit = { _, _ -> }
 ) {
     val context = LocalContext.current
     var index by remember { mutableIntStateOf(startIndex.coerceIn(0, episodeIds.lastIndex.coerceAtLeast(0))) }
@@ -329,13 +329,12 @@ fun PlayerScreen(
                 }
                 if (plan == null && dashError == null) dashError = "站点播放接口未返回片源"
                 if (plan != null && plan.encrypted) {
-                    // 加密流原生解码不了：直接把情况说清楚，别让用户对着黑屏猜
+                    // 加密流原生解码不了（密钥只在网页播放器里），直接转内嵌网页播放，
+                    // 用户不用再点一次；网页那边的进度会同步回本地历史。
                     loading = false
-                    error = buildString {
-                        append("该集片源为加密流（CENC），原生播放器无法解码。")
-                        append("\n点「网页播放」可在应用内直接观看这一集。")
-                        dashError?.let { append("\n站点直连：").append(it) }
-                    }
+                    error = "该集为加密片源，已切换到网页播放"
+                    routeHint = "网页播放"
+                    onWebPlay("${SiteSession.SITE}/player/${series.id}/${episodeIds[index]}", index)
                     return@LaunchedEffect
                 }
                 if (plan != null) {
@@ -873,7 +872,7 @@ fun PlayerScreen(
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         Pill("重试", true) { error = null; index = index }
                         Pill("网页播放") {
-                            onWebPlay("${SiteSession.SITE}/player/${series.id}/${episodeIds[index]}")
+                            onWebPlay("${SiteSession.SITE}/player/${series.id}/${episodeIds[index]}", index)
                         }
                         Pill("换清晰度") { quality = qualityOptions.first() }
                     }

@@ -49,13 +49,33 @@ fun WebSiteScreen(
     title: String,
     capture: Boolean,
     onClose: () -> Unit,
-    onCaptured: (String) -> Unit = {}
+    onCaptured: (String) -> Unit = {},
+    onProgress: (Long) -> Unit = {}
 ) {
     val context = LocalContext.current
     var loaded by remember { mutableStateOf(false) }
+    var webRef by remember { mutableStateOf<WebView?>(null) }
     var cookieState by remember { mutableStateOf("") }
     var saved by remember { mutableStateOf(false) }
     var tick by remember { mutableIntStateOf(0) }
+
+    // 网页播放器没有进度回调，直接读页面里 <video> 的 currentTime 记回本地
+    LaunchedEffect(capture) {
+        if (capture) return@LaunchedEffect
+        while (true) {
+            delay(4000)
+            runCatching {
+                (context as? android.app.Activity)?.runOnUiThread {
+                    webRef?.evaluateJavascript(
+                        "(document.querySelector('video')||{}).currentTime||0"
+                    ) { raw ->
+                        val seconds = raw?.trim('"', ' ')?.toDoubleOrNull() ?: 0.0
+                        if (seconds > 1.0) onProgress((seconds * 1000).toLong())
+                    }
+                }
+            }
+        }
+    }
 
     // 登录页是个 SPA，Cookie 是登录后异步下发的，所以轮询而不是等某个固定时机
     LaunchedEffect(capture, tick) {
@@ -122,6 +142,7 @@ fun WebSiteScreen(
                             ?.replace(" wv", "")
                         CookieManager.getInstance().setAcceptCookie(true)
                         CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+                        webRef = this
                         webViewClient = WebViewClient()
                         webChromeClient = WebChromeClient()
                         loadUrl(url)

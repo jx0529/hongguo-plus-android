@@ -50,7 +50,12 @@ private sealed interface Route {
     data object Settings : Route
 }
 
-private data class WebArgs(val url: String, val title: String, val capture: Boolean)
+private data class WebArgs(
+    val url: String,
+    val title: String,
+    val capture: Boolean,
+    val onProgress: (Long) -> Unit = {}
+)
 
 private data class PlayerArgs(
     val series: Series,
@@ -162,7 +167,15 @@ private fun AppRoot() {
                     player = null
                     route = Route.Detail(picked)
                 },
-                onWebPlay = { url -> web = WebArgs(url, "网页播放", false) }
+                onWebPlay = { url, idx ->
+                    val series = args.series
+                    val episodeIds = args.episodes
+                    web = WebArgs(url, "网页播放", false) { ms ->
+                        runCatching {
+                            Graph.library.putProgress(series, idx, episodeIds.size, ms)
+                        }
+                    }
+                }
             )
         }
 
@@ -172,7 +185,8 @@ private fun AppRoot() {
                 title = args.title,
                 capture = args.capture,
                 onClose = { web = null },
-                onCaptured = { }
+                onCaptured = { },
+                onProgress = args.onProgress
             )
         }
 
