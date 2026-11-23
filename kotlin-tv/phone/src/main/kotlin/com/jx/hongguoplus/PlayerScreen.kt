@@ -46,6 +46,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -87,6 +88,9 @@ import com.hongguotv.core.seasonNumber
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 
 private val speedOptions = listOf(0.75f, 1.0f, 1.25f, 1.5f, 2.0f)
@@ -117,7 +121,12 @@ fun PlayerScreen(
         ExoPlayer.Builder(context).build().apply { playWhenReady = true }
     }
     var remote by remember { mutableStateOf<RemoteVideo?>(null) }
-    var prefetched by remember { mutableStateOf<Pair<Int, RemoteVideo>?>(null) }
+    // 上下各 5 集预取池：滑到哪集直接从池里取，不再等取流
+    val pool = remember { mutableStateMapOf<Int, RemoteVideo>() }
+    var prefetchJob by remember { mutableStateOf<Job?>(null) }
+    var swipeHint by remember { mutableStateOf<String?>(null) }
+    var danmakuStyle by remember { mutableStateOf(DanmakuStyle.load(context)) }
+    var showDanmakuSettings by remember { mutableStateOf(false) }
     var ending by remember { mutableStateOf(false) }
     var danmakuOn by remember { mutableStateOf(true) }
     var danmaku by remember { mutableStateOf<List<Danmaku>>(emptyList()) }
@@ -140,7 +149,9 @@ fun PlayerScreen(
             runCatching {
                 activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
             }
-            runCatching { prefetched?.second?.close() }
+            runCatching { prefetchJob?.cancel() }
+            pool.values.forEach { runCatching { it.close() } }
+            pool.clear()
             runCatching { Graph.library.putHistory(series, index, episodeIds.size) }
             runCatching { player.release() }
             runCatching { remote?.close() }
@@ -150,10 +161,9 @@ fun PlayerScreen(
     LaunchedEffect(index, quality) {
         loading = true
         error = null
-        val reusable = prefetched?.takeIf { it.first == index }
-        prefetched = null
+        val reusable = pool.remove(index)
         val result = if (reusable != null) {
-            Result.success(reusable.second)
+            Result.success(reusable)
         } else {
             withContext(Dispatchers.IO) {
                 runCatching {
@@ -230,21 +240,37 @@ fun PlayerScreen(
         current // 保留 current 参与计算，避免误用
     }
 
-    // 当前集一旦就绪，就在后台把下一集的流准备好，滑动换集不再等
+    // 预取：当前集就绪后，后台把「上 5 集 + 下 5 集」依次准备好（2 路并发），滑动换集秒开
     LaunchedEffect(index, quality, loading) {
-        if (loading || index >= episodeIds.lastIndex) return@LaunchedEffect
-        delay(1800)
-        if (prefetched?.first == index + 1) return@LaunchedEffect
-        val next = withContext(Dispatchers.IO) {
-            runCatching {
-                val info = Streams.resolve(episodeIds[index + 1], quality)
-                RemoteVideo(Graph.http, info).prepare()
-            }.getOrNull()
-        } ?: return@LaunchedEffect
-        if (index < episodeIds.lastIndex) {
-            prefetched = (index + 1) to next
-        } else {
-            runCatching { next.close() }
+        if (loading) return@LaunchedEffect
+        prefetchJob?.cancel()
+        prefetchJob = launch {
+            delay(900)
+            val targets = (1..5).flatMap { listOf(index + it, index - it) }
+                .filter { it in episodeIds.indices && it != index }
+            val gate = Semaphore(2)
+            targets.forEach { target ->
+                launch(Dispatchers.IO) {
+                    gate.withPermit {
+                        if (pool.containsKey(target)) return@withPermit
+                        val video = runCatching {
+                            val info = Streams.resolve(episodeIds[target], quality)
+                            RemoteVideo(Graph.http, info).prepare()
+                        }.getOrNull()
+                        if (video != null) {
+                            if (pool.size < 12 && !pool.containsKey(target)) pool[target] = video
+                            else runCatching { video.close() }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 滑远之后，把池子里超出 ±6 集的实例关掉，避免占着连接
+    LaunchedEffect(index) {
+        pool.keys.filter { kotlin.math.abs(it - index) > 6 }.forEach { key ->
+            runCatching { pool.remove(key)?.close() }
         }
     }
 
@@ -287,6 +313,13 @@ fun PlayerScreen(
         }
     }
 
+    // 换集后的轻提示
+    LaunchedEffect(index) {
+        swipeHint = "第 ${index + 1} 集"
+        delay(1100)
+        swipeHint = null
+    }
+
     LaunchedEffect(showControls, isPlaying, loading) {
         if (showControls && isPlaying && !loading) {
             delay(3200)
@@ -300,11 +333,12 @@ fun PlayerScreen(
             .background(Color.Black)
             .pointerInput(index, episodeIds.size) {
                 var drag = 0f
+                val threshold = 56.dp.toPx()
                 detectVerticalDragGestures(
                     onDragEnd = {
                         when {
-                            drag <= -110f && index < episodeIds.lastIndex -> index += 1
-                            drag >= 110f && index > 0 -> index -= 1
+                            drag <= -threshold && index < episodeIds.lastIndex -> index += 1
+                            drag >= threshold && index > 0 -> index -= 1
                         }
                         drag = 0f
                     },
@@ -333,10 +367,50 @@ fun PlayerScreen(
             DanmakuOverlay(
                 items = danmaku,
                 positionMs = position,
+                playing = isPlaying && !loading,
+                style = danmakuStyle,
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(top = 44.dp, start = 8.dp, end = 8.dp)
             )
+        }
+
+        // 换集后的小提示（上滑/下滑的结果反馈）
+        AnimatedVisibility(
+            visible = swipeHint != null,
+            enter = fadeIn(tween(160)),
+            exit = fadeOut(tween(260)),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(
+                    swipeHint.orEmpty(),
+                    color = Color.White,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier
+                        .background(Color(0x8C000000), RoundedCornerShape(50))
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                )
+            }
+        }
+
+        // 控制条显示时的滑动提示
+        if (showControls && !loading && !ending) {
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .padding(end = 10.dp, top = 70.dp),
+                horizontalAlignment = Alignment.End
+            ) {
+                if (index < episodeIds.lastIndex) {
+                    Text("↑ 下一集", color = Color(0xB3FFFFFF), fontSize = 10.sp)
+                    Spacer(Modifier.height(4.dp))
+                }
+                if (index > 0) {
+                    Text("↓ 上一集", color = Color(0xB3FFFFFF), fontSize = 10.sp)
+                }
+            }
         }
 
         if (loading) {
@@ -479,6 +553,7 @@ fun PlayerScreen(
                     Pill(if (danmakuOn) "弹幕开" else "弹幕关") {
                         danmakuOn = !danmakuOn
                     }
+                    Pill("弹幕设置") { showDanmakuSettings = true }
                     Pill("发弹幕") { showDanmakuInput = true; danmakuNote = null }
                     Pill("简介") { showInfo = true }
                     Pill(if (isLandscape) "竖屏" else "横屏") {
@@ -556,6 +631,80 @@ fun PlayerScreen(
                     danmakuNote?.let {
                         Spacer(Modifier.height(8.dp))
                         Text(it, color = PlusColors.Gold, fontSize = 11.sp)
+                    }
+                }
+            }
+        }
+
+        if (showDanmakuSettings) {
+            Box(
+                Modifier.fillMaxSize().background(Color(0xCC000000)),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 18.dp)
+                        .background(Color(0xF216161B), RoundedCornerShape(18.dp))
+                        .padding(18.dp)
+                ) {
+                    Text("弹幕设置", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(16.dp))
+
+                    Text("显示行数", color = PlusColors.SubText, fontSize = 12.sp)
+                    Spacer(Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf(2, 3, 4, 5, 6).forEach { n ->
+                            Pill("$n 行", danmakuStyle.rows == n) {
+                                danmakuStyle = danmakuStyle.copy(rows = n).also {
+                                    DanmakuStyle.save(context, it)
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(Modifier.height(16.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("透明度", color = PlusColors.SubText, fontSize = 12.sp)
+                        Spacer(Modifier.weight(1f))
+                        Text("${(danmakuStyle.alpha * 100).toInt()}%", color = Color.White, fontSize = 12.sp)
+                    }
+                    Slider(
+                        value = danmakuStyle.alpha,
+                        onValueChange = {
+                            danmakuStyle = danmakuStyle.copy(alpha = it)
+                        },
+                        onValueChangeFinished = { DanmakuStyle.save(context, danmakuStyle) },
+                        valueRange = 0.2f..1f,
+                        colors = SliderDefaults.colors(
+                            thumbColor = PlusColors.Accent,
+                            activeTrackColor = PlusColors.Accent
+                        )
+                    )
+
+                    Spacer(Modifier.height(6.dp))
+                    Text("稀疏度", color = PlusColors.SubText, fontSize = 12.sp)
+                    Spacer(Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf(
+                            "稀疏" to 0.5f,
+                            "标准" to 1f,
+                            "密集" to 1.5f
+                        ).forEach { (label, value) ->
+                            Pill(label, kotlin.math.abs(danmakuStyle.density - value) < 0.1f) {
+                                danmakuStyle = danmakuStyle.copy(density = value).also {
+                                    DanmakuStyle.save(context, it)
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(Modifier.height(18.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Pill("恢复默认") {
+                            danmakuStyle = DanmakuStyle().also { DanmakuStyle.save(context, it) }
+                        }
+                        Pill("完成", true) { showDanmakuSettings = false }
                     }
                 }
             }
