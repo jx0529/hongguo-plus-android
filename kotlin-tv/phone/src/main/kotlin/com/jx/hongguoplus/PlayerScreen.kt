@@ -2,11 +2,14 @@
 package com.jx.hongguoplus
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.items
@@ -19,6 +22,8 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.Arrangement as LayoutArrangement
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -27,7 +32,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -49,6 +56,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,8 +68,10 @@ import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.app.PictureInPictureParams
 import android.os.Build
+import android.os.SystemClock
 import android.util.Rational
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -69,6 +79,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -139,6 +150,14 @@ fun PlayerScreen(
     var prefetchJob by remember { mutableStateOf<Job?>(null) }
     var swipeHint by remember { mutableStateOf<String?>(null) }
     var danmakuStyle by remember { mutableStateOf(DanmakuStyle.load(context)) }
+    // 上下滑预览：上一集 / 下一集的独立预览流（静音，滑动时才播）
+    var prevPreview by remember { mutableStateOf<RemoteVideo?>(null) }
+    var nextPreview by remember { mutableStateOf<RemoteVideo?>(null) }
+    var pageHeight by remember { mutableIntStateOf(0) }
+    var videoAspect by remember { mutableFloatStateOf(16f / 9f) }
+    var holdingSpeed by remember { mutableStateOf(false) }
+    val drag = remember { Animatable(0f) }
+    val uiScope = rememberCoroutineScope()
     var showDanmakuSettings by remember { mutableStateOf(false) }
     var ending by remember { mutableStateOf(false) }
     var danmakuOn by remember { mutableStateOf(true) }
@@ -163,6 +182,8 @@ fun PlayerScreen(
                 activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
             }
             runCatching { prefetchJob?.cancel() }
+            runCatching { prevPreview?.close() }
+            runCatching { nextPreview?.close() }
             pool.values.forEach { runCatching { it.close() } }
             pool.clear()
             runCatching { Graph.library.putHistory(series, index, episodeIds.size) }
@@ -302,6 +323,12 @@ fun PlayerScreen(
                 }
             }
 
+            override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
+                if (videoSize.width > 0 && videoSize.height > 0) {
+                    videoAspect = videoSize.width.toFloat() / videoSize.height.toFloat()
+                }
+            }
+
             override fun onIsPlayingChanged(playing: Boolean) {
                 isPlaying = playing
             }
@@ -326,6 +353,36 @@ fun PlayerScreen(
         }
     }
 
+    // 上下滑预览用的相邻集流：单独实例、预读更小，滑到才播放
+    LaunchedEffect(index, quality, loading) {
+        if (loading) return@LaunchedEffect
+        delay(600)
+        launch(Dispatchers.IO) {
+            if (index > 0) {
+                val v = runCatching {
+                    val info = Streams.resolve(episodeIds[index - 1], quality)
+                    RemoteVideo(Graph.http, info, aheadBytes = 1L * 1024 * 1024).prepare()
+                }.getOrNull()
+                withContext(Dispatchers.Main) {
+                    if (prevPreview != v) { runCatching { prevPreview?.close() }; prevPreview = v }
+                }
+            } else {
+                withContext(Dispatchers.Main) { runCatching { prevPreview?.close() }; prevPreview = null }
+            }
+            if (index < episodeIds.lastIndex) {
+                val v = runCatching {
+                    val info = Streams.resolve(episodeIds[index + 1], quality)
+                    RemoteVideo(Graph.http, info, aheadBytes = 1L * 1024 * 1024).prepare()
+                }.getOrNull()
+                withContext(Dispatchers.Main) {
+                    if (nextPreview != v) { runCatching { nextPreview?.close() }; nextPreview = v }
+                }
+            } else {
+                withContext(Dispatchers.Main) { runCatching { nextPreview?.close() }; nextPreview = null }
+            }
+        }
+    }
+
     // 换集后的轻提示
     LaunchedEffect(index) {
         swipeHint = "第 ${index + 1} 集"
@@ -344,19 +401,34 @@ fun PlayerScreen(
         Modifier
             .fillMaxSize()
             .background(Color.Black)
-            .pointerInput(index, episodeIds.size) {
-                var drag = 0f
-                val threshold = 56.dp.toPx()
+            .pointerInput(index, episodeIds.size, pageHeight) {
+                val limit = if (pageHeight > 0) pageHeight.toFloat() else 1f
                 detectVerticalDragGestures(
-                    onDragEnd = {
-                        when {
-                            drag <= -threshold && index < episodeIds.lastIndex -> index += 1
-                            drag >= threshold && index > 0 -> index -= 1
+                    onVerticalDrag = { change, amount ->
+                        change.consume()
+                        uiScope.launch {
+                            drag.snapTo((drag.value + amount).coerceIn(-limit * 1.05f, limit * 1.05f))
                         }
-                        drag = 0f
                     },
-                    onVerticalDrag = { _, amount ->
-                        drag += amount
+                    onDragEnd = {
+                        val d = drag.value
+                        val dir = when {
+                            d <= -limit * 0.2f && index < episodeIds.lastIndex -> 1
+                            d >= limit * 0.2f && index > 0 -> -1
+                            else -> 0
+                        }
+                        uiScope.launch {
+                            if (dir != 0) {
+                                drag.animateTo(dir * limit, tween(150))
+                                index += dir
+                                drag.snapTo(0f)
+                            } else {
+                                drag.animateTo(0f, spring())
+                            }
+                        }
+                    },
+                    onDragCancel = {
+                        uiScope.launch { drag.animateTo(0f, spring()) }
                     }
                 )
             }
@@ -364,17 +436,107 @@ fun PlayerScreen(
                 detectTapGestures(onTap = { showControls = !showControls })
             }
     ) {
-        AndroidView(
-            factory = { ctx ->
-                PlayerView(ctx).apply {
-                    useController = false
-                    resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                    setShutterBackgroundColor(android.graphics.Color.BLACK)
+        Box(
+            Modifier
+                .fillMaxSize()
+                .clipToBounds()
+                .onSizeChanged { if (it.height > 0) pageHeight = it.height }
+        ) {
+            // 上一集预览（往下拉时露出）
+            PreviewPage(
+                video = prevPreview,
+                playing = drag.value > 8f,
+                aspectRatio = videoAspect,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .offset { IntOffset(0, (-pageHeight + drag.value).toInt()) }
+            )
+            // 下一集预览（往上推时露出）
+            PreviewPage(
+                video = nextPreview,
+                playing = drag.value < -8f,
+                aspectRatio = videoAspect,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .offset { IntOffset(0, (pageHeight + drag.value).toInt()) }
+            )
+            // 当前集
+            // 用 TextureView 承载主画面：SurfaceView 在滑动位移/裁剪时会出现黑块
+            AndroidView(
+                factory = { ctx ->
+                    AspectRatioFrameLayout(ctx).apply {
+                        resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                        val view = android.view.TextureView(ctx)
+                        addView(
+                            view,
+                            android.view.ViewGroup.LayoutParams(
+                                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                                android.view.ViewGroup.LayoutParams.MATCH_PARENT
+                            )
+                        )
+                        player.setVideoTextureView(view)
+                    }
+                },
+                update = { root -> root.setAspectRatio(videoAspect) },
+                modifier = Modifier
+                    .fillMaxSize()
+                    .offset { IntOffset(0, drag.value.toInt()) }
+            )
+        }
+
+        // 长按左/右区域 2x 快进
+        if (!showEpisodePicker && !ending && !showInfo && !showDanmakuSettings && !showDanmakuInput) {
+            SpeedHoldZone(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .fillMaxWidth(0.26f)
+                    .align(Alignment.CenterStart),
+                onStart = {
+                    if (speed < 2.0f) {
+                        holdingSpeed = true
+                        player.setPlaybackSpeed(2.0f)
+                    }
+                },
+                onEnd = {
+                    if (holdingSpeed) {
+                        holdingSpeed = false
+                        player.setPlaybackSpeed(speed)
+                    }
                 }
-            },
-            update = { view -> view.player = player },
-            modifier = Modifier.fillMaxSize()
-        )
+            )
+            SpeedHoldZone(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .fillMaxWidth(0.26f)
+                    .align(Alignment.CenterEnd),
+                onStart = {
+                    if (speed < 2.0f) {
+                        holdingSpeed = true
+                        player.setPlaybackSpeed(2.0f)
+                    }
+                },
+                onEnd = {
+                    if (holdingSpeed) {
+                        holdingSpeed = false
+                        player.setPlaybackSpeed(speed)
+                    }
+                }
+            )
+            if (holdingSpeed) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+                    Text(
+                        "2.0x 快进中",
+                        color = Color.White,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier
+                            .padding(top = 70.dp)
+                            .background(Color(0x8C000000), RoundedCornerShape(50))
+                            .padding(horizontal = 14.dp, vertical = 6.dp)
+                    )
+                }
+            }
+        }
 
         if (danmakuOn && !showEpisodePicker && danmaku.isNotEmpty()) {
             DanmakuOverlay(
@@ -548,10 +710,14 @@ fun PlayerScreen(
 
                 Row(
                     modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(end = 14.dp, bottom = 62.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        .fillMaxWidth()
+                        .align(Alignment.BottomStart)
+                        .padding(bottom = 62.dp)
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
+                    Spacer(Modifier.width(12.dp))
                     Pill("${quality}p") {
                         quality = qualityOptions[(qualityOptions.indexOf(quality) + 1) % qualityOptions.size]
                         Graph.library.defaultQuality = quality
@@ -588,6 +754,7 @@ fun PlayerScreen(
                             }
                         }
                     }
+                    Spacer(Modifier.width(12.dp))
                 }
             }
         }
@@ -963,4 +1130,91 @@ private fun formatTime(millis: Long): String {
     val minutes = totalSeconds / 60
     val seconds = totalSeconds % 60
     return "%02d:%02d".format(minutes, seconds)
+}
+
+/** 相邻集预览页：自带 ExoPlayer（静音），用 TextureView 才能参与 Compose 的位移/裁剪合成。 */
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
+@Composable
+private fun PreviewPage(
+    video: RemoteVideo?,
+    playing: Boolean,
+    aspectRatio: Float,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    var previewPlayer by remember { mutableStateOf<ExoPlayer?>(null) }
+    val texture = remember { mutableStateOf<android.view.TextureView?>(null) }
+
+    LaunchedEffect(video) {
+        if (video == null) return@LaunchedEffect
+        val p = ExoPlayer.Builder(context).build().apply { volume = 0f }
+        runCatching {
+            val source = ProgressiveMediaSource.Factory { VideoDataSource(video) }
+                .createMediaSource(
+                    MediaItem.Builder()
+                        .setUri("preview://${video.info.url.hashCode()}")
+                        .setMimeType(MimeTypes.VIDEO_MP4)
+                        .build()
+                )
+            p.setMediaSource(source)
+            p.prepare()
+            p.playWhenReady = playing
+        }
+        previewPlayer = p
+        texture.value?.let { p.setVideoTextureView(it) }
+    }
+    LaunchedEffect(playing) { previewPlayer?.playWhenReady = playing }
+    DisposableEffect(Unit) { onDispose { runCatching { previewPlayer?.release() } } }
+
+    AndroidView(
+        factory = { ctx ->
+            AspectRatioFrameLayout(ctx).apply {
+                resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                val view = android.view.TextureView(ctx)
+                addView(
+                    view,
+                    android.view.ViewGroup.LayoutParams(
+                        android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                        android.view.ViewGroup.LayoutParams.MATCH_PARENT
+                    )
+                )
+                texture.value = view
+                previewPlayer?.setVideoTextureView(view)
+            }
+        },
+        update = { root -> root.setAspectRatio(aspectRatio) },
+        modifier = modifier
+    )
+}
+
+/** 长按 0.45 秒触发的加速区：抬手即恢复。 */
+@Composable
+private fun SpeedHoldZone(
+    modifier: Modifier,
+    onStart: () -> Unit,
+    onEnd: () -> Unit
+) {
+    val scope = rememberCoroutineScope()
+    Box(
+        modifier = modifier.pointerInput(Unit) {
+            awaitEachGesture {
+                awaitFirstDown(requireUnconsumed = false)
+                var held = true
+                var armed = false
+                val timer = scope.launch {
+                    delay(450)
+                    if (held) {
+                        armed = true
+                        onStart()
+                    }
+                }
+                while (held) {
+                    val event = awaitPointerEvent()
+                    if (event.changes.none { it.pressed }) held = false
+                }
+                timer.cancel()
+                if (armed) onEnd()
+            }
+        }
+    )
 }

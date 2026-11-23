@@ -148,6 +148,8 @@ fun Pill(text: String, selected: Boolean = false, onClick: () -> Unit) {
             text = text,
             color = if (selected) Color.White else PlusColors.SubText,
             fontSize = 12.sp,
+            maxLines = 1,
+            softWrap = false,
             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
         )
     }
