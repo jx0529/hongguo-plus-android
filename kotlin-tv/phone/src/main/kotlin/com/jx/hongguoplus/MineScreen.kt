@@ -61,6 +61,7 @@ fun MineScreen(onOpen: (Series) -> Unit, onLogin: () -> Unit, onSettings: () -> 
     var cloudRefresh by remember { mutableIntStateOf(0) }
     var unfinished by remember { mutableStateOf<List<UnfinishedItem>?>(null) }
     var cloudError by remember { mutableStateOf<String?>(null) }
+    var confirmLogout by remember { mutableStateOf(false) }
     var nickname by remember(refresh) { mutableStateOf(Graph.account.nickname) }
     var profile by remember { mutableStateOf<com.hongguotv.core.CloudProfile?>(null) }
     val loggedIn = remember(refresh) { Graph.account.isLoggedIn() }
@@ -234,12 +235,7 @@ fun MineScreen(onOpen: (Series) -> Unit, onLogin: () -> Unit, onSettings: () -> 
                         fontSize = 11.sp,
                         modifier = Modifier
                             .clip(RoundedCornerShape(50))
-                            .clickable {
-                                Graph.account.clear()
-                                profile = null
-                                refresh++
-                                cloudRefresh++
-                            }
+                            .clickable { confirmLogout = true }
                             .padding(horizontal = 10.dp, vertical = 6.dp)
                     )
                     Text(
@@ -448,6 +444,34 @@ fun MineScreen(onOpen: (Series) -> Unit, onLogin: () -> Unit, onSettings: () -> 
                 }
             }
         }
+    }
+
+    if (confirmLogout) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { confirmLogout = false },
+            title = { Text("退出登录？", color = PlusColors.Text) },
+            text = {
+                Text(
+                    "退出后本机收藏与观看历史仍会保留，但云端进度同步会停止，需要重新扫码或验证码登录。",
+                    color = PlusColors.SubText, fontSize = 12.sp, lineHeight = 18.sp
+                )
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = {
+                    confirmLogout = false
+                    Graph.account.clear()
+                    profile = null
+                    refresh++
+                    cloudRefresh++
+                }) { Text("确认退出", color = PlusColors.Accent) }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(onClick = { confirmLogout = false }) {
+                    Text("取消", color = PlusColors.SubText)
+                }
+            },
+            containerColor = PlusColors.Surface
+        )
     }
 }
 

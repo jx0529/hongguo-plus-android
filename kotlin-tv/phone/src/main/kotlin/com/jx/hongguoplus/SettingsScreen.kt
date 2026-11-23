@@ -19,6 +19,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -82,6 +84,19 @@ fun SettingsScreen(onBack: () -> Unit, onLogin: () -> Unit, onRefreshMine: () ->
     var confirmClear by remember { mutableStateOf(false) }
     var confirmLogout by remember { mutableStateOf(false) }
     var cacheInfo by remember { mutableStateOf("") }
+    var autoOn by remember { mutableStateOf(AutoUpdate.enabled(context)) }
+    var autoText by remember { mutableStateOf(AutoUpdate.message) }
+    var readyApk by remember { mutableStateOf(AutoUpdate.pending(context)) }
+    var readyVersion by remember { mutableStateOf(AutoUpdate.pendingVersion(context)) }
+
+    LaunchedEffect(autoOn) {
+        while (true) {
+            autoText = AutoUpdate.message
+            readyApk = AutoUpdate.pending(context)
+            readyVersion = AutoUpdate.pendingVersion(context)
+            kotlinx.coroutines.delay(1500)
+        }
+    }
 
     LaunchedEffect(Unit) {
         withContext(Dispatchers.IO) {
@@ -339,6 +354,47 @@ fun SettingsScreen(onBack: () -> Unit, onLogin: () -> Unit, onRefreshMine: () ->
                                     updateError = it.message ?: "下载失败"
                                 }
                             }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(14.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("自动下载更新", color = PlusColors.Text, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                        Text(
+                            autoText.ifBlank { if (autoOn) "已开启：空闲时自动下载" else "已关闭：不会自动下载" },
+                            color = PlusColors.SubText, fontSize = 10.sp, lineHeight = 14.sp
+                        )
+                    }
+                    Switch(
+                        checked = autoOn,
+                        onCheckedChange = {
+                            autoOn = it
+                            AutoUpdate.setEnabled(context, it)
+                            autoText = AutoUpdate.message
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = PlusColors.Accent,
+                            uncheckedThumbColor = PlusColors.SubText,
+                            uncheckedTrackColor = PlusColors.SurfaceHigh
+                        )
+                    )
+                }
+                if (readyApk != null) {
+                    Spacer(Modifier.height(10.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                "${readyVersion ?: "新版本"} 已下载好",
+                                color = PlusColors.Text, fontSize = 12.sp, fontWeight = FontWeight.Medium
+                            )
+                            Text("点右侧即可直接安装，不用再等下载", color = PlusColors.SubText, fontSize = 10.sp)
+                        }
+                        PillButton("安装", PlusColors.Accent, Color.White) {
+                            val apk = readyApk ?: return@PillButton
+                            runCatching { Updater.install(context, apk) }
+                                .onFailure { updateError = it.message ?: "无法拉起安装器" }
                         }
                     }
                 }

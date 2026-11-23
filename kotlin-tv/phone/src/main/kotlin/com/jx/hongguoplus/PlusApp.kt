@@ -50,5 +50,7 @@ class PlusApp : Application() {
     override fun onCreate() {
         super.onCreate()
         Graph.init(this)
+        // 空闲时静默把新版本下好，用户下次进来直接点安装
+        runCatching { AutoUpdate.syncInBackground(this) }
     }
 }

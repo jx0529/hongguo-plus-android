@@ -164,9 +164,11 @@ object Updater {
     }
 
     /** 下载到 cache/updates，返回安装包文件。 */
-    fun download(context: Context, release: Release, onProgress: (Int) -> Unit): File {
-        return downloadResume(context, release, onProgress)
-    }
+    fun download(context: Context, release: Release, onProgress: (Int) -> Unit): File =
+        downloadTo(context, release, File(context.cacheDir, "updates"), onProgress)
+
+    fun downloadTo(context: Context, release: Release, dir: File, onProgress: (Int) -> Unit): File =
+        downloadResume(release, dir, onProgress)
 
     private fun legacyDownload(context: Context, release: Release, onProgress: (Int) -> Unit): File {
         val dir = File(context.cacheDir, "updates").apply { mkdirs() }
@@ -295,8 +297,8 @@ object Updater {
     }
 
     /** 下载（断点续传 + 多镜像重试）：国内直连失败时自动换加速线。 */
-    private fun downloadResume(context: Context, release: Release, onProgress: (Int) -> Unit): File {
-        val dir = File(context.cacheDir, "updates").apply { mkdirs() }
+    private fun downloadResume(release: Release, dir: File, onProgress: (Int) -> Unit): File {
+        dir.mkdirs()
         val target = File(dir, "HongguoPlus-${release.version}.apk")
         if (target.exists() && release.size > 0 && target.length() == release.size) return target
 
@@ -330,5 +332,88 @@ object Updater {
             if (x != y) return x > y
         }
         return false
+    }
+}
+
+/** 自动更新：开着的时候后台静默把新版本下好，用户回来点一下就能装。 */
+object AutoUpdate {
+    private const val PREFS = "hongguoplus_auto_update"
+    private const val KEY = "enabled"
+
+    @Volatile
+    var message: String = ""
+
+    @Volatile
+    var running: Boolean = false
+
+    private fun prefs(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    /** 默认开：用户不用管，静默下好等他点安装。 */
+    fun enabled(context: Context): Boolean = prefs(context).getBoolean(KEY, true)
+
+    fun setEnabled(context: Context, value: Boolean) {
+        prefs(context).edit().putBoolean(KEY, value).apply()
+        message = if (value) "已开启：空闲时自动下载" else "已关闭：不会自动下载"
+        if (value) syncInBackground(context)
+    }
+
+    fun dir(context: Context): File = File(context.filesDir, "updates").apply { mkdirs() }
+
+    fun currentVersion(context: Context): String = runCatching {
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName.orEmpty()
+    }.getOrDefault("")
+
+    /** 已下载好、可以直接安装的包。 */
+    fun pending(context: Context): File? =
+        dir(context).listFiles { f -> f.isFile && f.name.endsWith(".apk", true) }
+            ?.maxByOrNull { it.lastModified() }
+
+    fun pendingVersion(context: Context): String? {
+        val name = pending(context)?.name ?: return null
+        val v = Regex("""HongguoPlus-([0-9.]+)\.apk""").find(name)?.groupValues?.get(1) ?: return null
+        return v.takeIf { it != currentVersion(context) }
+    }
+
+    /** 后台线程跑：检查 + 下载，全程静默。 */
+    fun syncInBackground(context: Context) {
+        if (!enabled(context) || running) return
+        val app = context.applicationContext
+        running = true
+        Thread {
+            try {
+                Thread.sleep(8000)
+                val version = currentVersion(app)
+                if (message.isBlank()) message = "后台检查更新中…"
+                val rel = Updater.check(version)
+                if (rel == null) {
+                    message = "已是最新版本（$version）"
+                    dir(app).listFiles()?.forEach { f ->
+                        if (f.isFile && f.name.endsWith(".apk", true) && !f.name.contains(version)) f.delete()
+                    }
+                    return@Thread
+                }
+                val ready = pendingVersion(app)
+                if (ready == rel.version) {
+                    message = "${rel.version} 已下载，可直接安装"
+                    return@Thread
+                }
+                if (!enabled(app)) return@Thread
+                message = "正在后台下载 ${rel.version}…"
+                var lastShown = -5
+                val file = Updater.downloadTo(app, rel, dir(app)) { p ->
+                    if (p - lastShown >= 5 || p == 100) {
+                        lastShown = p
+                        message = "正在后台下载 ${rel.version}…$p%"
+                    }
+                }
+                if (file.length() > 0) {
+                    message = "${rel.version} 已下载完成，点「安装」即可"
+                }
+            } catch (t: Throwable) {
+                message = "自动更新未完成：${t.message ?: "网络不可达"}"
+            } finally {
+                running = false
+            }
+        }.apply { isDaemon = true; name = "hongguoplus-auto-update" }.start()
     }
 }
