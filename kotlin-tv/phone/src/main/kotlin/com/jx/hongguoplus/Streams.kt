@@ -4,6 +4,7 @@ package com.jx.hongguoplus
 import com.hongguotv.core.EmptyPlaybackResponseException
 import com.hongguotv.core.PhoenixPlaybackDeviceSession
 import com.hongguotv.core.PhoenixPlaybackSource
+import com.hongguotv.core.PlaybackQualityMode
 import com.hongguotv.core.PlaybackSourceException
 import com.hongguotv.core.StreamInfo
 import com.hongguotv.core.UnplayableVideoException
@@ -11,16 +12,15 @@ import com.hongguotv.core.UnsupportedVideoFormatException
 import okhttp3.CookieJar
 
 /**
- * 取流线路：先走 Native（多清晰度模型），失败再走 Phoenix。
+ * 取流线路：Native → Phoenix 两级，每级都支持「指定清晰度 → 自动取最高可用」降档。
  *
- * 红果的播放接口有两条通道，不同片源/设备下可用性不同。上游电脑版会在 Native 返回空时
- * 自动切到 Phoenix 重取，这里补上同样的能力，并把每一步的结果记下来给自检页看。
+ * 红果不同片源的清晰度档位不一致：有的只有 720，按 1080 去找会被直接拒绝
+ * （"未提供达到指定清晰度的片源"）。所以每级先按用户选的档位找，失败就退到最优可用。
  */
 object Streams {
 
     data class Attempt(val route: String, val ok: Boolean, val detail: String)
 
-    /** 最近一次取流的线路尝试记录，供自检页展示。 */
     @Volatile
     var lastAttempts: List<Attempt> = emptyList()
         private set
@@ -34,33 +34,62 @@ object Streams {
 
     fun resolve(id: String, maxQuality: Int = 1080): StreamInfo {
         val attempts = mutableListOf<Attempt>()
+        val errors = mutableListOf<Throwable>()
 
-        try {
-            val info = Graph.repo.stream(id, maxQuality)
-            attempts += Attempt("Native", true, "清晰度 ${info.quality}，地址 ${info.url.length} 字符")
-            lastAttempts = attempts
+        fun record(route: String, error: Throwable) {
+            attempts += Attempt(route, false, describe(error))
+            errors += error
+        }
+
+        fun recordSuccess(route: String, info: StreamInfo): StreamInfo {
+            attempts += Attempt(route, true, "清晰度 ${info.quality}，地址 ${info.url.length} 字符")
+            lastAttempts = attempts.toList()
             return info
+        }
+
+        // ① Native：按用户档位
+        try {
+            return recordSuccess("Native", Graph.repo.stream(id, maxQuality))
         } catch (error: Throwable) {
-            attempts += Attempt("Native", false, describe(error))
+            record("Native", error)
             if (!shouldFallback(error)) {
-                lastAttempts = attempts
+                lastAttempts = attempts.toList()
                 throw error
             }
         }
 
-        try {
-            val info = phoenix.stream(id, maxQuality)
-            attempts += Attempt("Phoenix", true, "清晰度 ${info.quality}，地址 ${info.url.length} 字符")
-            lastAttempts = attempts
-            return info
-        } catch (error: Throwable) {
-            attempts += Attempt("Phoenix", false, describe(error))
-            lastAttempts = attempts
-            throw error
+        // ② Native：自动最高可用（解决片源只有 720/480 的情况）
+        if (maxQuality != PlaybackQualityMode.AUTO_COMPAT) {
+            try {
+                return recordSuccess("Native·自动档", Graph.repo.stream(id, PlaybackQualityMode.AUTO_COMPAT))
+            } catch (error: Throwable) {
+                record("Native·自动档", error)
+            }
         }
+
+        // ③ Phoenix：按用户档位
+        try {
+            return recordSuccess("Phoenix", phoenix.stream(id, maxQuality))
+        } catch (error: Throwable) {
+            record("Phoenix", error)
+            if (!shouldFallback(error)) {
+                lastAttempts = attempts.toList()
+                throw error
+            }
+        }
+
+        // ④ Phoenix：自动最高可用
+        try {
+            return recordSuccess("Phoenix·自动档", phoenix.stream(id, PlaybackQualityMode.AUTO_COMPAT))
+        } catch (error: Throwable) {
+            record("Phoenix·自动档", error)
+        }
+
+        lastAttempts = attempts.toList()
+        throw errors.lastOrNull() ?: UnplayableVideoException("本集片源暂不可用，请换一集")
     }
 
-    /** 只有"这条线路不可用"才换线；主动取消、格式不支持不必重试。 */
+    /** 只有"这条线路不可用"才换线；主动取消不必重试。 */
     private fun shouldFallback(error: Throwable): Boolean = when (error) {
         is java.io.InterruptedIOException -> false
         is UnsupportedVideoFormatException -> false

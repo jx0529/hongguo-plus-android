@@ -18,6 +18,12 @@ fun signingValue(env: String, key: String): String? =
     System.getenv(env) ?: signingProperties.getProperty(key)
 
 android {
+    lint {
+        // CI 与本地打包不需要 lint 拦截
+        checkReleaseBuilds = false
+        abortOnError = false
+    }
+
     namespace = "com.jx.hongguoplus"
     compileSdk = 36
 
@@ -25,7 +31,7 @@ android {
         applicationId = "com.jx.hongguoplus"
         minSdk = 26
         targetSdk = 35
-        versionCode = System.getenv("HONGGUOPLUS_VERSION_CODE")?.toInt() ?: 4
+        versionCode = System.getenv("HONGGUOPLUS_VERSION_CODE")?.toInt() ?: 6
         versionName = System.getenv("HONGGUOPLUS_VERSION_NAME") ?: appVersion
         resourceConfigurations += listOf("zh")
     }

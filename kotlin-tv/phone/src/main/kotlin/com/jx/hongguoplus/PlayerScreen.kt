@@ -2,6 +2,21 @@
 package com.jx.hongguoplus
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.items
+import coil.compose.AsyncImage
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.Arrangement as LayoutArrangement
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -40,9 +55,17 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import android.app.Activity
+import android.content.pm.ActivityInfo
+import android.content.res.Configuration
 import android.app.PictureInPictureParams
 import android.os.Build
 import android.util.Rational
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Path
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -56,9 +79,14 @@ import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.hongguotv.core.RemoteVideo
+import com.hongguotv.core.Danmaku
+import com.hongguotv.core.DanmakuRepository
+import com.hongguotv.core.OfficialCommentRepository
 import com.hongguotv.core.Series
+import com.hongguotv.core.seasonNumber
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private val speedOptions = listOf(0.75f, 1.0f, 1.25f, 1.5f, 2.0f)
@@ -70,7 +98,8 @@ fun PlayerScreen(
     series: Series,
     episodeIds: List<String>,
     startIndex: Int,
-    onClose: () -> Unit
+    onClose: () -> Unit,
+    onOpenSeries: (Series) -> Unit = {}
 ) {
     val context = LocalContext.current
     var index by remember { mutableIntStateOf(startIndex.coerceIn(0, episodeIds.lastIndex.coerceAtLeast(0))) }
@@ -88,9 +117,30 @@ fun PlayerScreen(
         ExoPlayer.Builder(context).build().apply { playWhenReady = true }
     }
     var remote by remember { mutableStateOf<RemoteVideo?>(null) }
+    var prefetched by remember { mutableStateOf<Pair<Int, RemoteVideo>?>(null) }
+    var ending by remember { mutableStateOf(false) }
+    var danmakuOn by remember { mutableStateOf(true) }
+    var danmaku by remember { mutableStateOf<List<Danmaku>>(emptyList()) }
+    var showDanmakuInput by remember { mutableStateOf(false) }
+    var danmakuText by remember { mutableStateOf("") }
+    var danmakuNote by remember { mutableStateOf<String?>(null) }
+    var showInfo by remember { mutableStateOf(false) }
+    var seasonList by remember { mutableStateOf<List<Series>>(emptyList()) }
+    var relatedList by remember { mutableStateOf<List<Series>>(emptyList()) }
+
+    val activity = context as? Activity
+    val isLandscape = androidx.compose.ui.platform.LocalConfiguration.current.orientation ==
+        Configuration.ORIENTATION_LANDSCAPE
 
     DisposableEffect(Unit) {
+        runCatching {
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR
+        }
         onDispose {
+            runCatching {
+                activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            }
+            runCatching { prefetched?.second?.close() }
             runCatching { Graph.library.putHistory(series, index, episodeIds.size) }
             runCatching { player.release() }
             runCatching { remote?.close() }
@@ -100,10 +150,16 @@ fun PlayerScreen(
     LaunchedEffect(index, quality) {
         loading = true
         error = null
-        val result = withContext(Dispatchers.IO) {
-            runCatching {
-                val info = Streams.resolve(episodeIds[index], quality)
-                RemoteVideo(Graph.http, info).prepare()
+        val reusable = prefetched?.takeIf { it.first == index }
+        prefetched = null
+        val result = if (reusable != null) {
+            Result.success(reusable.second)
+        } else {
+            withContext(Dispatchers.IO) {
+                runCatching {
+                    val info = Streams.resolve(episodeIds[index], quality)
+                    RemoteVideo(Graph.http, info).prepare()
+                }
             }
         }
         result.onSuccess { video ->
@@ -119,6 +175,11 @@ fun PlayerScreen(
             player.setMediaSource(source, true)
             player.prepare()
             player.setPlaybackSpeed(speed)
+            // 断点续看：同一集有记录就从上次位置接着播
+            val (savedIndex, savedPosition) = Graph.library.progressOf(series.id)
+            if (savedIndex == index && savedPosition > 3000L) {
+                runCatching { player.seekTo(savedPosition) }
+            }
             player.playWhenReady = true
             runCatching { Graph.library.putHistory(series, index, episodeIds.size) }
             loading = false
@@ -128,13 +189,77 @@ fun PlayerScreen(
         }
     }
 
+    // 官方弹幕：按 30 秒窗口分段拉取，随播放进度滚动加载
+    LaunchedEffect(index, danmakuOn) {
+        danmaku = emptyList()
+        if (!danmakuOn) return@LaunchedEffect
+        val repository = DanmakuRepository(Graph.http)
+        var lastWindowStart = -1L
+        while (true) {
+            val total = duration.coerceAtLeast(1L)
+            val start = ((position / 30_000L) * 30_000L)
+            if (start != lastWindowStart) {
+                val fetched = withContext(Dispatchers.IO) {
+                    runCatching {
+                        repository.window(series.id, episodeIds[index], total, start).comments
+                    }.getOrDefault(emptyList())
+                }
+                if (fetched.isNotEmpty()) {
+                    danmaku = (danmaku + fetched).distinctBy { it.id }.sortedBy { it.offsetMs }
+                }
+                lastWindowStart = start
+            }
+            delay(12_000)
+        }
+    }
+
+    // 同 IP / 上一季 / 下一季 / 同作者推荐（结局时展示）
+    LaunchedEffect(series.id) {
+        val detail = withContext(Dispatchers.IO) { runCatching { Graph.repo.detail(series.id) } }.getOrNull()
+            ?: return@LaunchedEffect
+        val current = seasonNumber(series.title)
+        seasonList = detail.sameName
+            .filter { it.id != series.id }
+            .filter { seasonNumber(it.title) != Int.MAX_VALUE }
+            .sortedBy { seasonNumber(it.title) }
+            .take(12)
+        relatedList = detail.related.filter { it.id != series.id }.take(12)
+        if (seasonList.isEmpty() && relatedList.isEmpty()) {
+            seasonList = detail.related
+        }
+        current // 保留 current 参与计算，避免误用
+    }
+
+    // 当前集一旦就绪，就在后台把下一集的流准备好，滑动换集不再等
+    LaunchedEffect(index, quality, loading) {
+        if (loading || index >= episodeIds.lastIndex) return@LaunchedEffect
+        delay(1800)
+        if (prefetched?.first == index + 1) return@LaunchedEffect
+        val next = withContext(Dispatchers.IO) {
+            runCatching {
+                val info = Streams.resolve(episodeIds[index + 1], quality)
+                RemoteVideo(Graph.http, info).prepare()
+            }.getOrNull()
+        } ?: return@LaunchedEffect
+        if (index < episodeIds.lastIndex) {
+            prefetched = (index + 1) to next
+        } else {
+            runCatching { next.close() }
+        }
+    }
+
     DisposableEffect(player) {
         val listener = object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
                 if (playbackState == Player.STATE_READY) loading = false
                 if (playbackState == Player.STATE_ENDED) {
                     runCatching { Graph.library.putHistory(series, index, episodeIds.size) }
-                    if (index < episodeIds.lastIndex) index += 1 else runCatching { player.pause() }
+                    if (index < episodeIds.lastIndex) {
+                        index += 1
+                    } else {
+                        runCatching { player.pause() }
+                        ending = true
+                    }
                 }
             }
 
@@ -147,9 +272,17 @@ fun PlayerScreen(
     }
 
     LaunchedEffect(player) {
+        var lastSaved = 0L
         while (true) {
             position = runCatching { player.currentPosition }.getOrDefault(0L)
             duration = runCatching { player.duration }.getOrDefault(0L).coerceAtLeast(0L)
+            // 每 4 秒落一次盘，杀进程/断电也不会丢太多进度
+            if (System.currentTimeMillis() - lastSaved > 4000L && position > 0L) {
+                lastSaved = System.currentTimeMillis()
+                runCatching {
+                    Graph.library.putProgress(series, index, episodeIds.size, position)
+                }
+            }
             delay(400)
         }
     }
@@ -196,6 +329,16 @@ fun PlayerScreen(
             modifier = Modifier.fillMaxSize()
         )
 
+        if (danmakuOn && !showEpisodePicker && danmaku.isNotEmpty()) {
+            DanmakuOverlay(
+                items = danmaku,
+                positionMs = position,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(top = 44.dp, start = 8.dp, end = 8.dp)
+            )
+        }
+
         if (loading) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -227,12 +370,25 @@ fun PlayerScreen(
             }
         }
 
-        AnimatedVisibility(visible = showControls) {
-            Box(Modifier.fillMaxSize().background(Color(0x66000000))) {
+        AnimatedVisibility(
+            visible = showControls,
+            enter = fadeIn(tween(200)),
+            exit = fadeOut(tween(280))
+        ) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(Color(0x66000000))
+                    .windowInsetsPadding(
+                        WindowInsets.safeDrawing.only(
+                            WindowInsetsSides.Top + WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom
+                        )
+                    )
+            ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(start = 14.dp, end = 16.dp, top = 18.dp),
+                        .padding(start = 14.dp, end = if (isLandscape) 30.dp else 16.dp, top = 12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
@@ -269,17 +425,11 @@ fun PlayerScreen(
                         .padding(horizontal = 12.dp, vertical = 18.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        if (isPlaying) "⏸" else "▶",
-                        color = Color.White,
-                        fontSize = 22.sp,
-                        modifier = Modifier
-                            .clickable {
-                                if (isPlaying) player.pause() else player.play()
-                                showControls = true
-                            }
-                            .padding(horizontal = 6.dp)
-                    )
+                    PlayPauseButton(playing = isPlaying) {
+                        if (isPlaying) player.pause() else player.play()
+                        showControls = true
+                    }
+                    Spacer(Modifier.width(8.dp))
                     Text(
                         formatTime(position),
                         color = Color.White,
@@ -326,6 +476,19 @@ fun PlayerScreen(
                         Graph.library.defaultSpeed = next
                     }
                     Pill("选集") { showEpisodePicker = true }
+                    Pill(if (danmakuOn) "弹幕开" else "弹幕关") {
+                        danmakuOn = !danmakuOn
+                    }
+                    Pill("发弹幕") { showDanmakuInput = true; danmakuNote = null }
+                    Pill("简介") { showInfo = true }
+                    Pill(if (isLandscape) "竖屏" else "横屏") {
+                        runCatching {
+                            activity?.requestedOrientation = if (isLandscape)
+                                ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                            else
+                                ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+                        }
+                    }
                     Pill("画中画") {
                         val activity = context as? Activity
                         runCatching {
@@ -336,6 +499,161 @@ fun PlayerScreen(
                                 activity.enterPictureInPictureMode(params)
                             }
                         }
+                    }
+                }
+            }
+        }
+
+        if (showDanmakuInput) {
+            Box(Modifier.fillMaxSize().background(Color(0xB3000000)), contentAlignment = Alignment.BottomCenter) {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal))
+                        .padding(14.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        androidx.compose.foundation.text.BasicTextField(
+                            value = danmakuText,
+                            onValueChange = { if (it.length <= 40) danmakuText = it },
+                            singleLine = true,
+                            textStyle = androidx.compose.ui.text.TextStyle(color = Color.White, fontSize = 14.sp),
+                            modifier = Modifier
+                                .weight(1f)
+                                .background(Color(0x33FFFFFF), RoundedCornerShape(50))
+                                .padding(horizontal = 14.dp, vertical = 10.dp)
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Pill("发送", true) {
+                            val text = danmakuText.trim()
+                            if (text.isBlank()) { danmakuNote = "先写点什么"; return@Pill }
+                            if (!Graph.account.isLoggedIn()) {
+                                danmakuNote = "发弹幕需要登录红果账号（我的 › 设置与自检 › 登录）"
+                                return@Pill
+                            }
+                            danmakuNote = "正在发送…"
+                            val seriesId = series.id
+                            val episodeId = episodeIds[index]
+                            val atPosition = position
+                            danmakuText = ""
+                            kotlinx.coroutines.MainScope().launch {
+                                val result = withContext(Dispatchers.IO) {
+                                    runCatching {
+                                        OfficialCommentRepository(Graph.http)
+                                            .publish(Graph.account.credentials(), seriesId, episodeId, text)
+                                    }
+                                }
+                                result.onSuccess {
+                                    danmaku = (danmaku + Danmaku(it, atPosition, text, 0)).sortedBy { it.offsetMs }
+                                    danmakuNote = "已发送"
+                                    showDanmakuInput = false
+                                }.onFailure { danmakuNote = it.message ?: "发送失败" }
+                            }
+                        }
+                        Spacer(Modifier.width(10.dp))
+                        Pill("关闭") { showDanmakuInput = false }
+                    }
+                    danmakuNote?.let {
+                        Spacer(Modifier.height(8.dp))
+                        Text(it, color = PlusColors.Gold, fontSize = 11.sp)
+                    }
+                }
+            }
+        }
+
+        if (showInfo) {
+            Box(Modifier.fillMaxSize().background(Color(0xCC000000)), contentAlignment = Alignment.Center) {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(20.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    Text(series.title, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "第 ${index + 1}/${episodeIds.size} 集" +
+                            (if (series.badge.isNotBlank()) " · ${series.badge}" else ""),
+                        color = Color(0xFFAAAAAA), fontSize = 11.sp
+                    )
+                    if (series.tags.isNotBlank()) {
+                        Spacer(Modifier.height(6.dp))
+                        Text(series.tags, color = PlusColors.Gold, fontSize = 11.sp)
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    Text("简介", color = PlusColors.SubText, fontSize = 11.sp)
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        series.description.ifBlank { "暂无简介" },
+                        color = Color(0xFFDDDDDD), fontSize = 12.sp, lineHeight = 19.sp
+                    )
+                    Spacer(Modifier.height(18.dp))
+                    Pill("收起") { showInfo = false }
+                }
+            }
+        }
+
+        if (ending) {
+            Box(Modifier.fillMaxSize().background(Color(0xE6000000)), contentAlignment = Alignment.BottomCenter) {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal))
+                        .padding(16.dp)
+                ) {
+                    Text(
+                        "《${series.title}》看完了",
+                        color = Color.White,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        if (seasonList.isNotEmpty() || relatedList.isNotEmpty())
+                            "同 IP / 同一系列的其他季，接着看不用找"
+                        else "正在找同 IP 的其他季…",
+                        color = Color(0xFFAAAAAA),
+                        fontSize = 11.sp
+                    )
+                    Spacer(Modifier.height(14.dp))
+
+                    fun seasonLabel(item: Series): String {
+                        val current = seasonNumber(series.title)
+                        val other = seasonNumber(item.title)
+                        return when {
+                            other != Int.MAX_VALUE && current != Int.MAX_VALUE && other > current -> "下一季"
+                            other != Int.MAX_VALUE && current != Int.MAX_VALUE && other < current -> "上一季"
+                            other != Int.MAX_VALUE -> "第 ${other} 季"
+                            else -> item.badge.ifBlank { "同 IP" }
+                        }
+                    }
+
+                    if (seasonList.isNotEmpty()) {
+                        Text("同一系列", color = PlusColors.Gold, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                        Spacer(Modifier.height(8.dp))
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            items(seasonList, key = { it.id }) { item ->
+                                SeriesCard(item, seasonLabel(item)) { ending = false; onOpenSeries(item) }
+                            }
+                        }
+                        Spacer(Modifier.height(14.dp))
+                    }
+                    if (seasonList.isEmpty() && relatedList.isNotEmpty()) {
+                        Text("同 IP 推荐", color = PlusColors.Gold, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                        Spacer(Modifier.height(8.dp))
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            items(relatedList, key = { it.id }) { item ->
+                                SeriesCard(item, item.badge.ifBlank { "同 IP" }) { ending = false; onOpenSeries(item) }
+                            }
+                        }
+                        Spacer(Modifier.height(14.dp))
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Pill("再看一遍") {
+                            ending = false
+                            index = 0
+                        }
+                        Pill("收起") { ending = false }
                     }
                 }
             }
@@ -389,6 +707,89 @@ fun PlayerScreen(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SeriesCard(item: Series, label: String, onClick: () -> Unit) {
+    Column(
+        Modifier.width(96.dp).clickable { onClick() }
+    ) {
+        Box(
+            Modifier
+                .width(96.dp)
+                .height(128.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(PlusColors.SurfaceHigh)
+        ) {
+            if (item.cover.isNotBlank()) {
+                AsyncImage(
+                    model = item.cover,
+                    contentDescription = item.title,
+                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+            Text(
+                label,
+                color = Color.White,
+                fontSize = 9.sp,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(6.dp)
+                    .background(Color(0x99000000), RoundedCornerShape(4.dp))
+                    .padding(horizontal = 5.dp, vertical = 2.dp)
+            )
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            item.title,
+            color = Color.White,
+            fontSize = 11.sp,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+@Composable
+private fun PlayPauseButton(playing: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .background(Color(0x40FFFFFF))
+            .clickable { onClick() },
+        contentAlignment = Alignment.Center
+    ) {
+        Canvas(Modifier.size(16.dp)) {
+            val w = size.width
+            val h = size.height
+            if (playing) {
+                val barWidth = w * 0.3f
+                val radius = CornerRadius(barWidth / 2)
+                drawRoundRect(
+                    color = Color.White,
+                    topLeft = Offset(w * 0.12f, h * 0.12f),
+                    size = Size(barWidth, h * 0.76f),
+                    cornerRadius = radius
+                )
+                drawRoundRect(
+                    color = Color.White,
+                    topLeft = Offset(w * 0.58f, h * 0.12f),
+                    size = Size(barWidth, h * 0.76f),
+                    cornerRadius = radius
+                )
+            } else {
+                val path = Path().apply {
+                    moveTo(w * 0.2f, h * 0.1f)
+                    lineTo(w * 0.92f, h * 0.5f)
+                    lineTo(w * 0.2f, h * 0.9f)
+                    close()
+                }
+                drawPath(path = path, color = Color.White)
             }
         }
     }

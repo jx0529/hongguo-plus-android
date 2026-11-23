@@ -150,7 +150,11 @@ private fun AppRoot() {
                 series = args.series,
                 episodeIds = args.episodes,
                 startIndex = args.index,
-                onClose = { player = null }
+                onClose = { player = null },
+                onOpenSeries = { picked ->
+                    player = null
+                    route = Route.Detail(picked)
+                }
             )
         }
 

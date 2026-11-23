@@ -22,6 +22,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -45,6 +46,7 @@ import kotlinx.coroutines.withContext
 
 @Composable
 fun LoginScreen(onDone: () -> Unit, onBack: () -> Unit) {
+    var mode by remember { mutableIntStateOf(0) } // 0=扫码登录（默认） 1=验证码登录
     var phone by remember { mutableStateOf("") }
     var code by remember { mutableStateOf("") }
     var sentInfo by remember { mutableStateOf<String?>(null) }
@@ -105,7 +107,17 @@ fun LoginScreen(onDone: () -> Unit, onBack: () -> Unit) {
             fontSize = 12.sp,
             lineHeight = 17.sp
         )
-        Spacer(Modifier.height(18.dp))
+        Spacer(Modifier.height(16.dp))
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TabChip("扫码登录（推荐）", mode == 0) { mode = 0 }
+            TabChip("验证码登录", mode == 1) { mode = 1 }
+        }
+        Spacer(Modifier.height(16.dp))
+
+        if (mode == 0) {
+            QrLoginPanel(onDone = onDone)
+        } else {
 
         Field(label = "手机号", value = phone, hint = "输入手机号", keyboard = KeyboardType.Phone) { phone = it }
         Spacer(Modifier.height(12.dp))
@@ -332,6 +344,25 @@ fun LoginScreen(onDone: () -> Unit, onBack: () -> Unit) {
             Spacer(Modifier.height(12.dp))
             Text(error!!, color = PlusColors.Accent, fontSize = 12.sp, lineHeight = 18.sp)
         }
+        }
+    }
+}
+
+@Composable
+private fun TabChip(text: String, active: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .clip(RoundedCornerShape(50))
+            .background(if (active) PlusColors.Accent else PlusColors.SurfaceHigh)
+            .clickable { onClick() }
+            .padding(horizontal = 14.dp, vertical = 8.dp)
+    ) {
+        Text(
+            text,
+            color = if (active) Color.White else PlusColors.SubText,
+            fontSize = 12.sp,
+            fontWeight = if (active) FontWeight.Bold else FontWeight.Normal
+        )
     }
 }
 

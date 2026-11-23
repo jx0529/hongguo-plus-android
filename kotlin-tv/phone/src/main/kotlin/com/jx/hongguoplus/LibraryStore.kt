@@ -10,7 +10,8 @@ data class HistoryEntry(
     val series: Series,
     val episodeIndex: Int,
     val episodeCount: Int,
-    val updatedAt: Long
+    val updatedAt: Long,
+    val positionMs: Long = 0L
 )
 
 /**
@@ -59,18 +60,19 @@ class LibraryStore(context: Context) {
                 series = series,
                 episodeIndex = o.optInt("episodeIndex", 0),
                 episodeCount = o.optInt("episodeCount", 0),
-                updatedAt = o.optLong("updatedAt", 0L)
+                updatedAt = o.optLong("updatedAt", 0L),
+                positionMs = o.optLong("positionMs", 0L)
             )
         }.sortedByDescending { it.updatedAt }
     }.getOrDefault(emptyList())
 
     fun historyOf(id: String): HistoryEntry? = history().firstOrNull { it.series.id == id }
 
-    fun putHistory(series: Series, episodeIndex: Int, episodeCount: Int) {
+    fun putHistory(series: Series, episodeIndex: Int, episodeCount: Int, positionMs: Long = 0L) {
         val list = history().filterNot { it.series.id == series.id }.toMutableList()
         list.add(
             0,
-            HistoryEntry(series, episodeIndex, episodeCount, System.currentTimeMillis())
+            HistoryEntry(series, episodeIndex, episodeCount, System.currentTimeMillis(), positionMs)
         )
         val array = JSONArray()
         list.take(MAX_HISTORY).forEach { entry ->
@@ -80,9 +82,19 @@ class LibraryStore(context: Context) {
                     .put("episodeIndex", entry.episodeIndex)
                     .put("episodeCount", entry.episodeCount)
                     .put("updatedAt", entry.updatedAt)
+                    .put("positionMs", entry.positionMs)
             )
         }
         prefs.edit().putString(KEY_HISTORY, array.toString()).apply()
+    }
+
+    /** 只更新本剧进度，不改变列表顺序语义（但会刷新时间为最近观看）。 */
+    fun putProgress(series: Series, episodeIndex: Int, episodeCount: Int, positionMs: Long) =
+        putHistory(series, episodeIndex, episodeCount, positionMs)
+
+    fun progressOf(id: String): Pair<Int, Long> {
+        val entry = historyOf(id) ?: return 0 to 0L
+        return entry.episodeIndex to entry.positionMs
     }
 
     fun removeHistory(id: String) {
@@ -95,6 +107,7 @@ class LibraryStore(context: Context) {
                     .put("episodeIndex", entry.episodeIndex)
                     .put("episodeCount", entry.episodeCount)
                     .put("updatedAt", entry.updatedAt)
+                    .put("positionMs", entry.positionMs)
             )
         }
         prefs.edit().putString(KEY_HISTORY, array.toString()).apply()
