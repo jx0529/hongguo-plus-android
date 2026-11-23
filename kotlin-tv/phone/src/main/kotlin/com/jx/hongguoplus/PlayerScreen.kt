@@ -264,9 +264,12 @@ fun PlayerScreen(
 
         // 站点直连（网页版那条 play-info 接口）优先：App 的 video_model 接口现在常回
         // 200+空响应，这条线路不依赖设备注册签名，返回 DASH（视频/音频两路）
+        var dashError: String? = null
         val dashPlan = if (reusable == null) {
             withContext(Dispatchers.IO) {
-                runCatching { SiteDash.resolve(series.id, episodeIds[index], quality) }.getOrNull()
+                runCatching { SiteDash.resolve(series.id, episodeIds[index], quality) }
+                    .onFailure { dashError = it.message }
+                    .getOrNull()
             }
         } else null
 
@@ -314,7 +317,10 @@ fun PlayerScreen(
             startWith(source)
         }.onFailure {
             loading = false
-            error = it.message ?: "取流失败，稍后再试"
+            error = buildString {
+                dashError?.let { append("站点直连：").append(it).append("\n") }
+                append("App 接口：").append(it.message ?: "取流失败，稍后再试")
+            }
         }
     }
 

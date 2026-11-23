@@ -20,7 +20,9 @@ object Updater {
         val notes: String,
         val apkUrl: String,
         val size: Long,
-        val altUrl: String = ""
+        val altUrl: String = "",
+        /** jsDelivr 等高速 CDN 直链（优先于 GitHub 原始地址）。 */
+        val cdnUrl: String = ""
     )
 
     private const val API = "https://api.github.com/repos/jx0529/hongguo-plus-android/releases/latest"
@@ -110,7 +112,8 @@ object Updater {
                 notes = json.optString("notes").take(3000),
                 apkUrl = apkUrl,
                 size = json.optLong("size"),
-                altUrl = json.optString("github")
+                altUrl = json.optString("github"),
+                cdnUrl = json.optString("cdn")
             )
         }
     }
@@ -304,6 +307,10 @@ object Updater {
 
         var lastError: Throwable? = null
         val sources = buildList {
+            if (release.cdnUrl.isNotBlank()) {
+                add(release.cdnUrl)
+                add("https://fastly.jsdelivr.net" + release.cdnUrl.substringAfter("cdn.jsdelivr.net"))
+            }
             addAll(mirrors(release.apkUrl))
             if (release.altUrl.isNotBlank()) addAll(mirrors(release.altUrl))
         }
@@ -339,22 +346,27 @@ object Updater {
 object AutoUpdate {
     private const val PREFS = "hongguoplus_auto_update"
     private const val KEY = "enabled"
-
-    @Volatile
-    var message: String = ""
-
-    @Volatile
-    var running: Boolean = false
+    private const val KEY_MESSAGE = "message"
+    private const val WORK_NAME = "hongguoplus-auto-update"
+    private const val PERIODIC_NAME = "hongguoplus-auto-update-periodic"
 
     private fun prefs(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    /** 跨进程可读的状态文案（后台被系统杀掉也还在）。 */
+    val message: String
+        get() = runCatching { prefs(Graph.appContext).getString(KEY_MESSAGE, "").orEmpty() }.getOrDefault("")
+
+    fun setMessage(context: Context, text: String) {
+        prefs(context).edit().putString(KEY_MESSAGE, text).apply()
+    }
 
     /** 默认开：用户不用管，静默下好等他点安装。 */
     fun enabled(context: Context): Boolean = prefs(context).getBoolean(KEY, true)
 
     fun setEnabled(context: Context, value: Boolean) {
         prefs(context).edit().putBoolean(KEY, value).apply()
-        message = if (value) "已开启：空闲时自动下载" else "已关闭：不会自动下载"
-        if (value) syncInBackground(context)
+        setMessage(context, if (value) "已开启：后台自动下载" else "已关闭：不会自动下载")
+        if (value) schedule(context) else cancel(context)
     }
 
     fun dir(context: Context): File = File(context.filesDir, "updates").apply { mkdirs() }
@@ -374,46 +386,85 @@ object AutoUpdate {
         return v.takeIf { it != currentVersion(context) }
     }
 
-    /** 后台线程跑：检查 + 下载，全程静默。 */
-    fun syncInBackground(context: Context) {
-        if (!enabled(context) || running) return
+    /**
+     * 交给 WorkManager：进程退出、App 被划掉后任务还在系统队列里，联网时继续下载。
+     * 同时排一个 6 小时周期任务，保证长时间不进 App 也能自己发现新版本。
+     */
+    fun schedule(context: Context) {
+        if (!enabled(context)) return
         val app = context.applicationContext
-        running = true
-        Thread {
-            try {
-                Thread.sleep(8000)
-                val version = currentVersion(app)
-                if (message.isBlank()) message = "后台检查更新中…"
-                val rel = Updater.check(version)
-                if (rel == null) {
-                    message = "已是最新版本（$version）"
-                    dir(app).listFiles()?.forEach { f ->
-                        if (f.isFile && f.name.endsWith(".apk", true) && !f.name.contains(version)) f.delete()
-                    }
-                    return@Thread
+        runCatching {
+            val request = androidx.work.OneTimeWorkRequestBuilder<UpdateWorker>()
+                .setConstraints(
+                    androidx.work.Constraints.Builder()
+                        .setRequiredNetworkType(androidx.work.NetworkType.CONNECTED)
+                        .build()
+                )
+                .setBackoffCriteria(androidx.work.BackoffPolicy.LINEAR, 30, java.util.concurrent.TimeUnit.SECONDS)
+                .addTag(WORK_NAME)
+                .build()
+            androidx.work.WorkManager.getInstance(app)
+                .enqueueUniqueWork(WORK_NAME, androidx.work.ExistingWorkPolicy.KEEP, request)
+        }
+        runCatching {
+            val periodic = androidx.work.PeriodicWorkRequestBuilder<UpdateWorker>(6, java.util.concurrent.TimeUnit.HOURS)
+                .setConstraints(
+                    androidx.work.Constraints.Builder()
+                        .setRequiredNetworkType(androidx.work.NetworkType.CONNECTED)
+                        .build()
+                )
+                .addTag(PERIODIC_NAME)
+                .build()
+            androidx.work.WorkManager.getInstance(app)
+                .enqueueUniquePeriodicWork(
+                    PERIODIC_NAME,
+                    androidx.work.ExistingPeriodicWorkPolicy.KEEP,
+                    periodic
+                )
+        }
+    }
+
+    fun cancel(context: Context) {
+        runCatching {
+            androidx.work.WorkManager.getInstance(context.applicationContext).cancelUniqueWork(WORK_NAME)
+            androidx.work.WorkManager.getInstance(context.applicationContext).cancelUniqueWork(PERIODIC_NAME)
+        }
+    }
+
+    /** 在 Worker 里执行：检查 + 下载，全程静默。返回是否已下好可用。 */
+    fun runSync(context: Context, onProgress: ((Int) -> Unit)? = null): Boolean {
+        val app = context.applicationContext
+        if (!enabled(app)) return false
+        return try {
+            val version = currentVersion(app)
+            setMessage(app, "后台检查更新中…")
+            val rel = Updater.check(version)
+            if (rel == null) {
+                setMessage(app, "已是最新版本（$version）")
+                dir(app).listFiles()?.forEach { f ->
+                    if (f.isFile && f.name.endsWith(".apk", true) && !f.name.contains(version)) f.delete()
                 }
-                val ready = pendingVersion(app)
-                if (ready == rel.version) {
-                    message = "${rel.version} 已下载，可直接安装"
-                    return@Thread
-                }
-                if (!enabled(app)) return@Thread
-                message = "正在后台下载 ${rel.version}…"
-                var lastShown = -5
-                val file = Updater.downloadTo(app, rel, dir(app)) { p ->
-                    if (p - lastShown >= 5 || p == 100) {
-                        lastShown = p
-                        message = "正在后台下载 ${rel.version}…$p%"
-                    }
-                }
-                if (file.length() > 0) {
-                    message = "${rel.version} 已下载完成，点「安装」即可"
-                }
-            } catch (t: Throwable) {
-                message = "自动更新未完成：${t.message ?: "网络不可达"}"
-            } finally {
-                running = false
+                return false
             }
-        }.apply { isDaemon = true; name = "hongguoplus-auto-update" }.start()
+            if (pendingVersion(app) == rel.version) {
+                setMessage(app, "${rel.version} 已下载，可直接安装")
+                return true
+            }
+            setMessage(app, "正在后台下载 ${rel.version}…")
+            var lastShown = -10
+            val file = Updater.downloadTo(app, rel, dir(app)) { p ->
+                onProgress?.invoke(p)
+                if (p - lastShown >= 10 || p == 100) {
+                    lastShown = p
+                    setMessage(app, "正在后台下载 ${rel.version}…$p%")
+                }
+            }
+            val ok = file.length() > 0
+            setMessage(app, if (ok) "${rel.version} 已下载完成，点「安装」即可" else "自动更新未完成")
+            ok
+        } catch (t: Throwable) {
+            setMessage(app, "自动更新未完成：${t.message ?: "网络不可达"}")
+            false
+        }
     }
 }

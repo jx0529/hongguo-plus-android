@@ -76,13 +76,16 @@ object SiteDash {
             .put("definition", definition)
             .toString()
             .toRequestBody("application/json; charset=utf-8".toMediaType())
-        val request = Request.Builder()
+        // 站点接口对「第 2 集以后」的片源做保护，未登录只会回 403 protected_playback_unavailable；
+        // 登录态（扫码/验证码拿到的站内 Cookie）带上就能正常下发。
+        val cookie = runCatching { Graph.account.credentials()?.cookie.orEmpty() }.getOrDefault("")
+        val builder = Request.Builder()
             .url(ENDPOINT)
             .header("User-Agent", UA)
             .header("Referer", "https://hongguoduanju.com/player/$seriesId/$episodeId")
             .header("Accept", "application/json")
-            .post(body)
-            .build()
+        if (cookie.isNotBlank()) builder.header("Cookie", cookie)
+        val request = builder.post(body).build()
         http.newCall(request).execute().use { response ->
             if (!response.isSuccessful) throw java.io.IOException("站点播放接口 HTTP ${response.code}")
             val text = response.body?.string().orEmpty()

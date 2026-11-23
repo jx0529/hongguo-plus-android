@@ -31,7 +31,7 @@ android {
         applicationId = "com.jx.hongguoplus"
         minSdk = 26
         targetSdk = 35
-        versionCode = System.getenv("HONGGUOPLUS_VERSION_CODE")?.toInt() ?: 31
+        versionCode = System.getenv("HONGGUOPLUS_VERSION_CODE")?.toInt() ?: 32
         versionName = System.getenv("HONGGUOPLUS_VERSION_NAME") ?: appVersion
         resourceConfigurations += listOf("zh")
     }
@@ -93,6 +93,7 @@ dependencies {
     implementation("androidx.media3:media3-ui:1.11.1")
     implementation("androidx.media3:media3-exoplayer-hls:1.11.1")
     implementation("androidx.media3:media3-exoplayer-dash:1.11.1")
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
 
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("io.coil-kt:coil-compose:2.7.0")
