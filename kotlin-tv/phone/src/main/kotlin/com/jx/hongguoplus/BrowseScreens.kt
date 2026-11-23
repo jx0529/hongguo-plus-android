@@ -311,7 +311,9 @@ private fun RankRow(rank: Int, series: Series, onClick: () -> Unit) {
 
 @Composable
 fun SearchScreen(onOpen: (Series) -> Unit, onBack: () -> Unit) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     var query by remember { mutableStateOf("") }
+    var history by remember { mutableStateOf(SearchHistory.load(context)) }
     var suggestions by remember { mutableStateOf<List<String>>(emptyList()) }
     var items by remember { mutableStateOf<List<Series>>(emptyList()) }
     var page by remember { mutableIntStateOf(1) }
@@ -326,6 +328,8 @@ fun SearchScreen(onOpen: (Series) -> Unit, onBack: () -> Unit) {
         if (keyword.isBlank()) return
         if (loading) return
         staged = keyword
+        SearchHistory.add(context, keyword)
+        history = SearchHistory.load(context)
         val target = if (resetPage) 1 else page + 1
         loading = true
         error = null
@@ -396,6 +400,22 @@ fun SearchScreen(onOpen: (Series) -> Unit, onBack: () -> Unit) {
                         }
                     }
                 )
+                if (query.isNotEmpty()) {
+                    Text(
+                        "✕",
+                        color = PlusColors.SubText,
+                        fontSize = 13.sp,
+                        modifier = Modifier
+                            .clickable {
+                                query = ""
+                                items = emptyList()
+                                suggestions = emptyList()
+                                related = emptyList()
+                                staged = ""
+                            }
+                            .padding(horizontal = 6.dp)
+                    )
+                }
                 Text(
                     "搜索",
                     color = PlusColors.Accent,
@@ -404,6 +424,62 @@ fun SearchScreen(onOpen: (Series) -> Unit, onBack: () -> Unit) {
                 )
             }
         }
+        // 搜索记录：点一下直接搜，最右侧可单条删除
+        if (query.isBlank() && items.isEmpty() && history.isNotEmpty()) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "搜索记录",
+                        color = PlusColors.Text,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Text(
+                        "清空",
+                        color = PlusColors.SubText,
+                        fontSize = 12.sp,
+                        modifier = Modifier.clickable {
+                            SearchHistory.clear(context)
+                            history = emptyList()
+                        }
+                    )
+                }
+                history.take(12).forEach { word ->
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            word,
+                            color = PlusColors.SubText,
+                            fontSize = 14.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable {
+                                    query = word
+                                    doSearch(word, true)
+                                }
+                                .padding(vertical = 11.dp)
+                        )
+                        Text(
+                            "✕",
+                            color = PlusColors.SubText,
+                            fontSize = 13.sp,
+                            modifier = Modifier
+                                .clickable {
+                                    SearchHistory.remove(context, word)
+                                    history = SearchHistory.load(context)
+                                }
+                                .padding(horizontal = 8.dp, vertical = 8.dp)
+                        )
+                    }
+                }
+            }
+        }
+
         if ((suggestions.isNotEmpty() || related.isNotEmpty()) && items.isEmpty()) {
             androidx.compose.foundation.lazy.LazyColumn(
                 contentPadding = PaddingValues(horizontal = 16.dp),

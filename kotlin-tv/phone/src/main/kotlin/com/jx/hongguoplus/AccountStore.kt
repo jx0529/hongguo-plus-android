@@ -15,13 +15,23 @@ class AccountStore(context: Context) {
     private val prefs = context.getSharedPreferences("hongguoplus_account", Context.MODE_PRIVATE)
 
     fun credentials(): AccountCredentials? {
-        val raw = prefs.getString(KEY_CREDENTIALS, null) ?: return null
-        return runCatching { AccountCredentials.fromJson(raw) }.getOrNull()
+        val stored = prefs.getString(KEY_CREDENTIALS, null) ?: return null
+        val raw = SecretBox.decrypt(stored) ?: return null
+        val parsed = runCatching { AccountCredentials.fromJson(raw) }.getOrNull() ?: return null
+        // 旧数据是明文：读到就立刻改写成密文，用户无需重新登录
+        if (!SecretBox.isEncrypted(stored)) {
+            prefs.edit().putString(KEY_CREDENTIALS, SecretBox.encrypt(raw)).apply()
+        }
+        return parsed
     }
 
     fun save(credentials: AccountCredentials) {
-        prefs.edit().putString(KEY_CREDENTIALS, credentials.toJson()).apply()
+        prefs.edit().putString(KEY_CREDENTIALS, SecretBox.encrypt(credentials.toJson())).apply()
     }
+
+    /** 凭证是否已用 Keystore 加密保存。 */
+    fun credentialsEncrypted(): Boolean =
+        SecretBox.isEncrypted(prefs.getString(KEY_CREDENTIALS, null))
 
     fun clear() {
         prefs.edit().remove(KEY_CREDENTIALS).remove(KEY_NICKNAME).apply()

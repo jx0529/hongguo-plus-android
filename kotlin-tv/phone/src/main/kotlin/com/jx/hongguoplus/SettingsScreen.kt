@@ -18,6 +18,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -77,6 +79,16 @@ fun SettingsScreen(onBack: () -> Unit, onLogin: () -> Unit, onRefreshMine: () ->
     var updateBusy by remember { mutableStateOf(false) }
     var progress by remember { mutableIntStateOf(-1) }
     var updateError by remember { mutableStateOf<String?>(null) }
+    var confirmClear by remember { mutableStateOf(false) }
+    var confirmLogout by remember { mutableStateOf(false) }
+    var cacheInfo by remember { mutableStateOf("") }
+
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) {
+            val coverBytes = CoverStore.sizeBytes(context)
+            cacheInfo = "封面 ${coverBytes / 1024 / 1024}MB · 片源地址 ${Streams.cachedCount()} 条"
+        }
+    }
 
     LaunchedEffect(loggedIn) {
         if (!loggedIn) {
@@ -216,6 +228,43 @@ fun SettingsScreen(onBack: () -> Unit, onLogin: () -> Unit, onRefreshMine: () ->
                 }
             }
 
+            // ── 存储与缓存 ────────────────────────────────────────────
+            Spacer(Modifier.height(18.dp))
+            SectionTitle("存储")
+            Card {
+                InfoLine("已占用", cacheInfo.ifBlank { "统计中…" })
+                Text(
+                    "收藏、历史和已看过的剧封面会存到本机，弱网下也不用重新加载。",
+                    color = PlusColors.SubText, fontSize = 11.sp, lineHeight = 16.sp,
+                    modifier = Modifier.padding(top = 6.dp)
+                )
+                Spacer(Modifier.height(12.dp))
+                PillButton("清除缓存", PlusColors.SurfaceHigh, PlusColors.Text) { confirmClear = true }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "⚠ 清除后会删除本机保存的封面缩略图和片源缓存地址，下次打开需要重新加载；收藏、观看历史和登录状态不受影响。",
+                    color = PlusColors.SubText, fontSize = 10.sp, lineHeight = 15.sp
+                )
+            }
+
+            // ── 账号与安全 ────────────────────────────────────────────
+            Spacer(Modifier.height(18.dp))
+            SectionTitle("账号与安全")
+            Card {
+                InfoLine("登录凭证", if (!loggedIn) "未登录" else if (Graph.account.credentialsEncrypted()) "已加密" else "加密中…")
+                InfoLine("加密方式", "Android Keystore · AES-256-GCM")
+                InfoLine("存放位置", "仅本机，不同步到任何服务器")
+                if (loggedIn) {
+                    Spacer(Modifier.height(12.dp))
+                    PillButton("退出登录", PlusColors.SurfaceHigh, PlusColors.Text) { confirmLogout = true }
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "⚠ 退出只清除本机的登录凭证：云端进度同步会停止，本地收藏与观看历史仍然保留；重新登录需要重新扫码或验证码。",
+                        color = PlusColors.SubText, fontSize = 10.sp, lineHeight = 15.sp
+                    )
+                }
+            }
+
             // ── 应用更新 ─────────────────────────────────────────────
             Spacer(Modifier.height(18.dp))
             SectionTitle("应用更新")
@@ -304,6 +353,56 @@ fun SettingsScreen(onBack: () -> Unit, onLogin: () -> Unit, onRefreshMine: () ->
 
             Spacer(Modifier.height(28.dp))
         }
+    }
+
+    if (confirmClear) {
+        AlertDialog(
+            onDismissRequest = { confirmClear = false },
+            title = { Text("清除缓存？", color = PlusColors.Text) },
+            text = {
+                Text(
+                    "将删除本机保存的封面缩略图与片源缓存地址（约等于你看到的占用）。\n\n收藏、观看历史、登录状态都不会被删除，但下次打开剧集需要重新取流。",
+                    color = PlusColors.SubText, fontSize = 12.sp, lineHeight = 18.sp
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmClear = false
+                    CoverStore.clear(context)
+                    Streams.clearDisk()
+                    cacheInfo = "封面 0MB · 片源地址 0 条"
+                }) { Text("确认清除", color = PlusColors.Accent) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmClear = false }) { Text("取消", color = PlusColors.SubText) }
+            },
+            containerColor = PlusColors.Surface
+        )
+    }
+
+    if (confirmLogout) {
+        AlertDialog(
+            onDismissRequest = { confirmLogout = false },
+            title = { Text("退出登录？", color = PlusColors.Text) },
+            text = {
+                Text(
+                    "退出会清除本机加密保存的登录凭证，云端观看进度将不再同步。\n\n本地收藏和历史会保留。下次登录需要重新扫码或输入验证码。",
+                    color = PlusColors.SubText, fontSize = 12.sp, lineHeight = 18.sp
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmLogout = false
+                    Graph.account.clear()
+                    loggedIn = false
+                    onRefreshMine()
+                }) { Text("确认退出", color = PlusColors.Accent) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmLogout = false }) { Text("取消", color = PlusColors.SubText) }
+            },
+            containerColor = PlusColors.Surface
+        )
     }
 }
 

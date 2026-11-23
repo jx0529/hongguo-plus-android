@@ -30,6 +30,9 @@ object Graph {
             .build()
     }
 
+    lateinit var appContext: Context
+        private set
+
     fun init(context: Context) {
         if (initialized) return
         synchronized(this) {
@@ -37,6 +40,7 @@ object Graph {
             repo = ContentRepository(http)
             library = LibraryStore(context.applicationContext)
             account = AccountStore(context.applicationContext)
+            appContext = context.applicationContext
             initialized = true
         }
     }

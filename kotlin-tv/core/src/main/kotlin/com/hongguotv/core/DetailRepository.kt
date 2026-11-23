@@ -31,11 +31,15 @@ internal class DetailRepository(
     private fun social(o: JSONObject?): SeriesSocial {
         if(o==null) return SeriesSocial()
         val favorite=compactCount(o.str("series_favorite_count"))
+        val like=compactCount(o.str("series_like_count"))
+        val comments=o.optJSONObject("reviews")?.str("total_count").orEmpty().let { compactCount(it) }
         return SeriesSocial(
             rating=o.optDouble("rating",0.0).takeIf { it>0 } ?: 0.0,
             ratingCount=compactCount(o.str("rating_count")),
-            favoriteText=if(favorite.isBlank()) "" else "${favorite}收藏",
-            heatText=o.optJSONObject("hot_score_data")?.str("text").orEmpty()
+            favoriteText=favorite,
+            heatText=o.optJSONObject("hot_score_data")?.str("text").orEmpty(),
+            likeText=like,
+            commentText=comments
         )
     }
     private fun compactCount(raw: String): String {

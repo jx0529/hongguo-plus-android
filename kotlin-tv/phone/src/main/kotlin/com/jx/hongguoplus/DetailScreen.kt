@@ -146,7 +146,7 @@ fun DetailScreen(
                         val socialText = listOf(
                             if (social.rating > 0) "评分 ${social.rating}" else "",
                             social.heatText,
-                            social.favoriteText
+                            if (social.favoriteText.isBlank()) "" else "${social.favoriteText}收藏".takeIf { it.isNotBlank() }?.let { "$it 收藏" }.orEmpty()
                         ).filter { it.isNotBlank() }.joinToString(" · ")
                         if (socialText.isNotBlank()) {
                             Text(

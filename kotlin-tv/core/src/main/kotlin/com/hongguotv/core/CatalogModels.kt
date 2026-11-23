@@ -9,7 +9,15 @@ data class Series(val id: String, val title: String, val cover: String = "", val
     companion object { fun fromJson(o: JSONObject) = Series(o.str("id"),o.str("title"),o.str("cover"),o.str("description"),o.str("badge"),o.str("tags")) }
 }
 /** 详情页附带的社交数据，缺失时各字段保持默认空值，调用方按需隐藏。 */
-data class SeriesSocial(val rating: Double = 0.0, val ratingCount: String = "", val favoriteText: String = "", val heatText: String = "") {
+data class SeriesSocial(
+    val rating: Double = 0.0,
+    val ratingCount: String = "",
+    val favoriteText: String = "",
+    val heatText: String = "",
+    val likeText: String = "",
+    val commentText: String = "",
+    val shareText: String = ""
+) {
     val isEmpty get() = rating<=0.0 && favoriteText.isBlank() && heatText.isBlank()
 }
 data class Detail(val series: Series, val episodes: List<String>, val related: List<Series> = emptyList(), val sameName: List<Series> = emptyList(), val social: SeriesSocial = SeriesSocial()) {

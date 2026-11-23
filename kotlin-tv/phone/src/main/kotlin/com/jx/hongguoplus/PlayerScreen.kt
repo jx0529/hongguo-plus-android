@@ -180,6 +180,7 @@ fun PlayerScreen(
     var danmakuNote by remember { mutableStateOf<String?>(null) }
     var showInfo by remember { mutableStateOf(false) }
     var seasonList by remember { mutableStateOf<List<Series>>(emptyList()) }
+    var social by remember { mutableStateOf(com.hongguotv.core.SeriesSocial()) }
     var relatedList by remember { mutableStateOf<List<Series>>(emptyList()) }
 
     val activity = context as? Activity
@@ -313,6 +314,7 @@ fun PlayerScreen(
     LaunchedEffect(series.id) {
         val detail = withContext(Dispatchers.IO) { runCatching { ContentCache.detail(series.id) } }.getOrNull()
             ?: return@LaunchedEffect
+        social = detail.social
         val current = seasonNumber(series.title)
         seasonList = detail.sameName
             .filter { it.id != series.id }
@@ -388,6 +390,7 @@ fun PlayerScreen(
             }
 
             override fun onPlayerError(playbackError: androidx.media3.common.PlaybackException) {
+                runCatching { Streams.evict(episodeIds[index], quality) }
                 loading = false
                 error = "播放失败（${playbackError.errorCodeName}）：${playbackError.message ?: "解码器或片源异常"}"
             }
@@ -518,8 +521,12 @@ fun PlayerScreen(
                     }
                 )
             }
-            .pointerInput(Unit) {
-                detectTapGestures(onTap = { showControls = !showControls })
+            .pointerInput(isPlaying) {
+                detectTapGestures(onTap = {
+                    // 点视频直接暂停/继续，同时把控制层露出来
+                    showControls = true
+                    if (isPlaying) player.pause() else player.play()
+                })
             }
     ) {
         Box(
@@ -710,11 +717,14 @@ fun PlayerScreen(
                         modifier = Modifier.size(30.dp)
                     )
                     Spacer(Modifier.height(10.dp))
-                    Text(
-                        if (slowLoad) "加载较慢，正在拉取片源…可切 720p 或点重试" else "第 ${index + 1} 集 取流中…",
-                        color = Color(0xFFBBBBBB),
-                        fontSize = 12.sp
-                    )
+                    if (slowLoad) {
+                        Spacer(Modifier.height(10.dp))
+                        Text(
+                            "网络较慢，点一下可重试",
+                            color = Color(0xFFBBBBBB),
+                            fontSize = 11.sp
+                        )
+                    }
                 }
             }
         }
@@ -888,6 +898,7 @@ fun PlayerScreen(
             PortraitControls(
                 visible = showControls,
                 series = series,
+                social = social,
                 episodeIndex = index,
                 episodeCount = episodeIds.size,
                 speed = speed,
@@ -1206,6 +1217,7 @@ fun PlayerScreen(
 private fun PortraitControls(
     visible: Boolean,
     series: Series,
+    social: com.hongguotv.core.SeriesSocial = com.hongguotv.core.SeriesSocial(),
     episodeIndex: Int,
     episodeCount: Int,
     speed: Float,
@@ -1348,17 +1360,20 @@ private fun PortraitControls(
                     ) {
                         PortraitAction(
                             glyph = if (favorite) "★" else "☆",
-                            label = "收藏",
+                            label = social.favoriteText.ifBlank { "收藏" },
                             tint = if (favorite) PlusColors.Gold else Color.White
                         ) {
                             favorite = runCatching { Graph.library.toggleFavorite(series) }.getOrDefault(favorite)
                         }
-                        PortraitAction(glyph = "💬", label = if (commentCount > 0) "$commentCount" else "评论") {
+                        PortraitAction(
+                            glyph = "💬",
+                            label = social.commentText.ifBlank { if (commentCount > 0) "$commentCount" else "评论" }
+                        ) {
                             onComment()
                         }
                         PortraitAction(
                             glyph = "♥",
-                            label = if (likeCount > 0) likeCount.toString() else "点赞",
+                            label = social.likeText.ifBlank { if (likeCount > 0) likeCount.toString() else "点赞" },
                             tint = if (liked) Color(0xFFFF5A5F) else Color.White
                         ) {
                             liked = !liked
@@ -1366,7 +1381,7 @@ private fun PortraitControls(
                             val prefs = context.getSharedPreferences("hongguoplus_likes", android.content.Context.MODE_PRIVATE)
                             prefs.edit().putBoolean("liked_${series.id}", liked).putInt("likes_${series.id}", likeCount).apply()
                         }
-                        PortraitAction(glyph = "↗", label = "分享") { onShare() }
+                        PortraitAction(glyph = "↗", label = social.shareText.ifBlank { "分享" }) { onShare() }
                     }
                 }
 
@@ -1467,10 +1482,10 @@ private fun PortraitControls(
                                 .size(38.dp)
                                 .clip(RoundedCornerShape(12.dp))
                                 .background(Color(0x59FFFFFF))
-                                .clickable { onFavorite() },
+                                .clickable { onLandscape() },
                             contentAlignment = Alignment.Center
                         ) {
-                            Text("＋", color = Color.White, fontSize = 18.sp)
+                            Text("⤢", color = Color.White, fontSize = 18.sp)
                         }
                     }
                 }

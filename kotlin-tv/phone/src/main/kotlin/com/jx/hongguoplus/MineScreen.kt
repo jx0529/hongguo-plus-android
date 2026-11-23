@@ -33,6 +33,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
@@ -63,6 +64,12 @@ fun MineScreen(onOpen: (Series) -> Unit, onLogin: () -> Unit, onSettings: () -> 
     val loggedIn = remember(refresh) { Graph.account.isLoggedIn() }
     val favorites = remember(refresh) { Graph.library.favorites() }
     val history = remember(refresh) { Graph.library.history() }
+
+    LaunchedEffect(refresh) {
+        withContext(Dispatchers.IO) {
+            runCatching { CoverStore.ensureAll(context, Graph.library.favorites() + Graph.library.history().map { it.series }) }
+        }
+    }
 
     LaunchedEffect(cloudRefresh, loggedIn) {
         if (!loggedIn) {
@@ -100,6 +107,17 @@ fun MineScreen(onOpen: (Series) -> Unit, onLogin: () -> Unit, onSettings: () -> 
                     modifier = Modifier.padding(top = 3.dp)
                 )
             }
+            Box(
+                Modifier
+                    .size(34.dp)
+                    .clip(CircleShape)
+                    .background(PlusColors.SurfaceHigh)
+                    .clickable { onSettings() },
+                contentAlignment = Alignment.Center
+            ) {
+                Text("⚙", color = PlusColors.Text, fontSize = 15.sp)
+            }
+            androidx.compose.foundation.layout.Spacer(Modifier.size(8.dp))
             Box(
                 Modifier
                     .clip(RoundedCornerShape(50))
@@ -225,12 +243,7 @@ fun MineScreen(onOpen: (Series) -> Unit, onLogin: () -> Unit, onSettings: () -> 
                                         .background(PlusColors.SurfaceHigh)
                                         .clickable { onOpen(item.series) }
                                 ) {
-                                    AsyncImage(
-                                        model = item.series.cover,
-                                        contentDescription = item.series.title,
-                                        contentScale = ContentScale.Crop,
-                                        modifier = Modifier.fillMaxSize()
-                                    )
+                                    CoverImage(item.series, Modifier.fillMaxSize())
                                 }
                                 Text(
                                     item.series.title,
@@ -281,12 +294,7 @@ fun MineScreen(onOpen: (Series) -> Unit, onLogin: () -> Unit, onSettings: () -> 
                                         .background(PlusColors.SurfaceHigh)
                                         .clickable { onOpen(item.series) }
                                 ) {
-                                    AsyncImage(
-                                        model = item.series.cover,
-                                        contentDescription = item.series.title,
-                                        contentScale = ContentScale.Crop,
-                                        modifier = Modifier.fillMaxSize()
-                                    )
+                                    CoverImage(item.series, Modifier.fillMaxSize())
                                 }
                                 Column(
                                     Modifier.weight(1f).clickable { onOpen(item.series) }.padding(start = 10.dp)
@@ -470,12 +478,7 @@ private fun SeriesList(
                         .background(PlusColors.SurfaceHigh)
                         .clickable { onOpen(series) }
                 ) {
-                    AsyncImage(
-                        model = series.cover,
-                        contentDescription = series.title,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
-                    )
+                    CoverImage(series, Modifier.fillMaxSize())
                 }
                 Column(Modifier.weight(1f).clickable { onOpen(series) }.padding(start = 10.dp)) {
                     Text(
@@ -502,4 +505,23 @@ private fun SeriesList(
             }
         }
     }
+}
+
+/** 列表封面：优先读本地已保存的缩略图，没有再走网络并顺手落盘。 */
+@androidx.compose.runtime.Composable
+private fun CoverImage(series: Series, modifier: Modifier = Modifier) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var local by remember(series.id) { mutableStateOf(CoverStore.local(context, series.id)) }
+    LaunchedEffect(series.id) {
+        if (local == null) {
+            withContext(Dispatchers.IO) { runCatching { CoverStore.ensure(context, series) } }
+            local = CoverStore.local(context, series.id)
+        }
+    }
+    AsyncImage(
+        model = local ?: series.cover,
+        contentDescription = series.title,
+        contentScale = ContentScale.Crop,
+        modifier = modifier
+    )
 }

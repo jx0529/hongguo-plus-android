@@ -37,14 +37,71 @@ object Streams {
      */
     private val networkGate = java.util.concurrent.locks.ReentrantLock()
 
-    /** 取流结果短期缓存：同一集重复进入不再重复请求接口。 */
+    /** 取流结果缓存：内存 8 分钟，磁盘 6 小时（重启 App / 重开列表不用再等取流）。 */
     private val cache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, StreamInfo>>()
     private const val CACHE_MS = 8 * 60 * 1000L
+    private const val DISK_TTL = 6 * 60 * 60 * 1000L
+    private val prefs by lazy {
+        Graph.appContext.getSharedPreferences("hongguoplus_stream_cache", android.content.Context.MODE_PRIVATE)
+    }
 
     fun cached(id: String, maxQuality: Int): StreamInfo? {
-        val hit = cache["$id|$maxQuality"] ?: return null
-        return if (System.currentTimeMillis() - hit.first < CACHE_MS) hit.second else null
+        val key = "$id|$maxQuality"
+        val memory = cache[key]
+        if (memory != null && System.currentTimeMillis() - memory.first < CACHE_MS) return memory.second
+        val raw = prefs.getString(key, null)
+        val info = raw?.let { decode(it) }
+        if (info != null) {
+            cache[key] = System.currentTimeMillis() to info
+            return info
+        }
+        return null
     }
+
+    /** 已缓存的片源条数。 */
+    fun cachedCount(): Int = prefs.all.size
+
+    /** 清掉磁盘上的片源缓存（封面缓存由 CoverStore 负责）。 */
+    fun clearDisk() {
+        cache.clear()
+        prefs.edit().clear().apply()
+    }
+
+    /** 片源地址失效（播放报错）时清掉缓存，重试会重新取流。 */
+    fun evict(id: String, maxQuality: Int) {
+        val key = "$id|$maxQuality"
+        cache.remove(key)
+        prefs.edit().remove(key).apply()
+    }
+
+    private fun remember(id: String, maxQuality: Int, info: StreamInfo) {
+        val key = "$id|$maxQuality"
+        cache[key] = System.currentTimeMillis() to info
+        val json = org.json.JSONObject()
+            .put("url", info.url)
+            .put("quality", info.quality)
+            .put("mime", info.mimeType)
+            .put("ooiua", info.requireOoiUaMp4Validation)
+            .put("key", info.key?.let { android.util.Base64.encodeToString(it, android.util.Base64.NO_WRAP) } ?: "")
+            .put("at", System.currentTimeMillis())
+        prefs.edit().putString(key, json.toString()).apply()
+    }
+
+    private fun decode(raw: String): StreamInfo? = runCatching {
+        val json = org.json.JSONObject(raw)
+        val at = json.optLong("at")
+        if (at <= 0L || System.currentTimeMillis() - at > DISK_TTL) return null
+        val url = json.optString("url")
+        if (url.isBlank()) return null
+        val keyText = json.optString("key")
+        StreamInfo(
+            url = url,
+            key = if (keyText.isBlank()) null else android.util.Base64.decode(keyText, android.util.Base64.NO_WRAP),
+            quality = json.optString("quality"),
+            mimeType = json.optString("mime", "video/mp4"),
+            requireOoiUaMp4Validation = json.optBoolean("ooiua", false)
+        )
+    }.getOrNull()
 
     fun resolve(id: String, maxQuality: Int = 1080): StreamInfo {
         cached(id, maxQuality)?.let { return it }
@@ -73,7 +130,7 @@ object Streams {
         fun recordSuccess(route: String, info: StreamInfo): StreamInfo {
             attempts += Attempt(route, true, "清晰度 ${info.quality}，地址 ${info.url.length} 字符")
             lastAttempts = attempts.toList()
-            cache["$id|$maxQuality"] = System.currentTimeMillis() to info
+            remember(id, maxQuality, info)
             return info
         }
 
