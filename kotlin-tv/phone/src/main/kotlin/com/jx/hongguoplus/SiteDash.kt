@@ -78,7 +78,7 @@ object SiteDash {
             .toRequestBody("application/json; charset=utf-8".toMediaType())
         // 站点接口对「第 2 集以后」的片源做保护，未登录只会回 403 protected_playback_unavailable；
         // 登录态（扫码/验证码拿到的站内 Cookie）带上就能正常下发。
-        val cookie = runCatching { Graph.account.credentials()?.cookie.orEmpty() }.getOrDefault("")
+        val cookie = SiteSession.playbackCookie()
         val builder = Request.Builder()
             .url(ENDPOINT)
             .header("User-Agent", UA)

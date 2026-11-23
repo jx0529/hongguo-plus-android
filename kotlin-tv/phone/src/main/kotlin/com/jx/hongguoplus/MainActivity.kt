@@ -50,6 +50,8 @@ private sealed interface Route {
     data object Settings : Route
 }
 
+private data class WebArgs(val url: String, val title: String, val capture: Boolean)
+
 private data class PlayerArgs(
     val series: Series,
     val episodes: List<String>,
@@ -69,9 +71,11 @@ class MainActivity : ComponentActivity() {
 private fun AppRoot() {
     var route by remember { mutableStateOf<Route>(Route.Home) }
     var player by remember { mutableStateOf<PlayerArgs?>(null) }
+    var web by remember { mutableStateOf<WebArgs?>(null) }
 
-    BackHandler(enabled = player != null || route != Route.Home) {
+    BackHandler(enabled = web != null || player != null || route != Route.Home) {
         when {
+            web != null -> web = null
             player != null -> player = null
             route is Route.Detail || route == Route.Login || route == Route.Settings -> route = Route.Home
             route == Route.Search -> route = Route.Home
@@ -106,7 +110,10 @@ private fun AppRoot() {
                     Route.Settings -> SettingsScreen(
                         onBack = { route = Route.Mine },
                         onLogin = { route = Route.Login },
-                        onRefreshMine = { route = Route.Mine }
+                        onRefreshMine = { route = Route.Mine },
+                        onSiteLogin = {
+                            web = WebArgs(SiteSession.SITE, "红果网页登录", true)
+                        }
                     )
                     Route.Login -> LoginScreen(
                         onDone = { route = Route.Mine },
@@ -154,7 +161,18 @@ private fun AppRoot() {
                 onOpenSeries = { picked ->
                     player = null
                     route = Route.Detail(picked)
-                }
+                },
+                onWebPlay = { url -> web = WebArgs(url, "网页播放", false) }
+            )
+        }
+
+        web?.let { args ->
+            WebSiteScreen(
+                url = args.url,
+                title = args.title,
+                capture = args.capture,
+                onClose = { web = null },
+                onCaptured = { }
             )
         }
 

@@ -55,7 +55,12 @@ import kotlinx.coroutines.withContext
 data class CheckRow(val step: String, val ok: Boolean, val detail: String)
 
 @Composable
-fun SettingsScreen(onBack: () -> Unit, onLogin: () -> Unit, onRefreshMine: () -> Unit = {}) {
+fun SettingsScreen(
+    onBack: () -> Unit,
+    onLogin: () -> Unit,
+    onRefreshMine: () -> Unit = {},
+    onSiteLogin: () -> Unit = {}
+) {
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
     val scope = rememberCoroutineScope()
@@ -269,6 +274,17 @@ fun SettingsScreen(onBack: () -> Unit, onLogin: () -> Unit, onRefreshMine: () ->
                 InfoLine("登录凭证", if (!loggedIn) "未登录" else if (Graph.account.credentialsEncrypted()) "已加密" else "加密中…")
                 InfoLine("加密方式", "Android Keystore · AES-256-GCM")
                 InfoLine("存放位置", "仅本机，不同步到任何服务器")
+                InfoLine("网页登录", if (SiteSession.has(context)) "已登录（站点片源可用）" else "未登录")
+                Spacer(Modifier.height(10.dp))
+                PillButton(
+                    if (SiteSession.has(context)) "重新登录红果网页" else "登录红果网页（解锁播放）",
+                    PlusColors.SurfaceHigh, PlusColors.Text
+                ) { onSiteLogin() }
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "App 自己的播放接口近期一直返回空响应，片源改走红果网页版接口，需要一次网页登录。在 App 内登录一次即可，Cookie 只存本机。",
+                    color = PlusColors.SubText, fontSize = 10.sp, lineHeight = 15.sp
+                )
                 if (loggedIn) {
                     Spacer(Modifier.height(12.dp))
                     PillButton("退出登录", PlusColors.SurfaceHigh, PlusColors.Text) { confirmLogout = true }

@@ -123,7 +123,8 @@ fun PlayerScreen(
     episodeIds: List<String>,
     startIndex: Int,
     onClose: () -> Unit,
-    onOpenSeries: (Series) -> Unit = {}
+    onOpenSeries: (Series) -> Unit = {},
+    onWebPlay: (String) -> Unit = {}
 ) {
     val context = LocalContext.current
     var index by remember { mutableIntStateOf(startIndex.coerceIn(0, episodeIds.lastIndex.coerceAtLeast(0))) }
@@ -795,6 +796,9 @@ fun PlayerScreen(
                     Spacer(Modifier.height(10.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         Pill("重试", true) { error = null; index = index }
+                        Pill("网页播放") {
+                            onWebPlay("${SiteSession.SITE}/player/${series.id}/${episodeIds[index]}")
+                        }
                         Pill("换清晰度") { quality = qualityOptions.first() }
                     }
                 }
