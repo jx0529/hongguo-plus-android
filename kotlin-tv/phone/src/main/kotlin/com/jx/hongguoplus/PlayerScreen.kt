@@ -262,16 +262,7 @@ fun PlayerScreen(
         val reusable = pool.remove(index)
             ?: PrewarmPool.take(episodeIds[index], quality)
 
-        // 站点直连（网页版那条 play-info 接口）优先：App 的 video_model 接口现在常回
-        // 200+空响应，这条线路不依赖设备注册签名，返回 DASH（视频/音频两路）
         var dashError: String? = null
-        val dashPlan = if (reusable == null) {
-            withContext(Dispatchers.IO) {
-                runCatching { SiteDash.resolve(series.id, episodeIds[index], quality) }
-                    .onFailure { dashError = it.message }
-                    .getOrNull()
-            }
-        } else null
 
         fun startWith(source: MediaSource) {
             player.setMediaSource(source, true)
@@ -282,15 +273,6 @@ fun PlayerScreen(
             pendingSeek = if (savedIndex == index && savedPosition > 3000L) savedPosition else 0L
             player.playWhenReady = true
             // loading 由首帧回调收起，避免"黑屏但没有任何提示"
-        }
-
-        if (dashPlan != null) {
-            routeHint = "站点直连 ${dashPlan.quality}"
-            startWith(
-                DashMediaSource.Factory(DefaultDataSource.Factory(context))
-                    .createMediaSource(MediaItem.fromUri(SiteDash.mpdUri(dashPlan)))
-            )
-            return@LaunchedEffect
         }
 
         val result = if (reusable != null) {
@@ -315,11 +297,28 @@ fun PlayerScreen(
                         .build()
                 )
             startWith(source)
-        }.onFailure {
+        }.onFailure { appError ->
+            // App 接口拿不到时才去试站点直连：网页接口对未登录/受保护集数回 403，
+            // 反过来先打它反而容易把这次会话带进风控，所以只做兜底。
+            if (reusable == null) {
+                val plan = withContext(Dispatchers.IO) {
+                    runCatching { SiteDash.resolve(series.id, episodeIds[index], quality) }
+                        .onFailure { dashError = it.message }
+                        .getOrNull()
+                }
+                if (plan != null) {
+                    routeHint = "站点直连 ${plan.quality}"
+                    startWith(
+                        DashMediaSource.Factory(DefaultDataSource.Factory(context))
+                            .createMediaSource(MediaItem.fromUri(SiteDash.mpdUri(plan)))
+                    )
+                    return@LaunchedEffect
+                }
+            }
             loading = false
             error = buildString {
-                dashError?.let { append("站点直连：").append(it).append("\n") }
-                append("App 接口：").append(it.message ?: "取流失败，稍后再试")
+                append("App 接口：").append(appError.message ?: "取流失败，稍后再试")
+                dashError?.let { append("\n站点直连：").append(it) }
             }
         }
     }
