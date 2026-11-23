@@ -43,9 +43,11 @@ object Updater {
      * CDN 清单能读到就以其为准；读不到才回退 GitHub API，仍失败则抛出真实错误。
      */
     fun checkDetailed(currentVersion: String): Result<Release?> = runCatching {
+        val direct = runCatching { fetch(currentVersion) }
+        if (direct.isSuccess) return@runCatching direct.getOrNull()
         val cdn = runCatching { fetchFromCdn(currentVersion) }
         if (cdn.isSuccess) return@runCatching cdn.getOrNull()
-        fetch(currentVersion)
+        throw direct.exceptionOrNull() ?: java.io.IOException("更新服务器不可达")
     }
 
     /** 先从 CDN 上的更新清单取：一条小 JSON，国内基本不受墙影响。 */
@@ -77,8 +79,25 @@ object Updater {
     }
 
     private fun fetch(currentVersion: String): Release? {
+        var lastError: Throwable? = null
+        for (api in listOf(
+            API,
+            "https://gh-proxy.com/$API",
+            "https://v6.gh-proxy.org/$API",
+            "https://ghfast.top/$API"
+        )) {
+            try {
+                return fetchOne(api, currentVersion)
+            } catch (t: Throwable) {
+                lastError = t
+            }
+        }
+        throw lastError ?: java.io.IOException("更新服务器不可达")
+    }
+
+    private fun fetchOne(url: String, currentVersion: String): Release? {
         val request = Request.Builder()
-            .url(API)
+            .url(url)
             .header("Accept", "application/vnd.github+json")
             .header("User-Agent", "HongguoPlus")
             .build()
@@ -200,12 +219,14 @@ object Updater {
 
     /** 国内直连 github.com 经常被墙：按顺序尝试多个加速镜像。 */
     private fun mirrors(url: String): List<String> {
-        if (url.contains("cdn.jsdelivr.net")) return listOf(url, "https://fastly.jsdelivr.net" + url.substringAfter("cdn.jsdelivr.net"))
+        if (url.contains("cdn.jsdelivr.net")) {
+            return listOf(url, "https://fastly.jsdelivr.net" + url.substringAfter("cdn.jsdelivr.net"))
+        }
         return listOf(
             url,
-            "https://ghfast.top/$url",
             "https://gh-proxy.com/$url",
             "https://v6.gh-proxy.org/$url",
+            "https://ghfast.top/$url",
             "https://ghproxy.net/$url"
         )
     }
