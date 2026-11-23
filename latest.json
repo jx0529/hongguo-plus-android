@@ -1,0 +1,7 @@
+{
+  "version": "1.3.2",
+  "url": "https://cdn.jsdelivr.net/gh/jx0529/hongguo-plus-android@dist/HongguoPlus.apk",
+  "github": "https://github.com/jx0529/hongguo-plus-android/releases/download/v1.3.2/HongguoPlus-1.3.2.apk",
+  "notes": "1.3.2：检查更新与下载改走 gh-proxy 镜像（已验证可通），高速 CDN 兜底。",
+  "size": 16114338
+}
