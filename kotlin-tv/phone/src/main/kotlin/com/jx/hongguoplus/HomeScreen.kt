@@ -161,7 +161,7 @@ fun HomeScreen(onOpen: (Series) -> Unit) {
             Column(Modifier.weight(1f)) {
                 Text("红果Plus", color = PlusColors.Accent, fontSize = 22.sp, fontWeight = FontWeight.Black)
                 Text(
-                    "手机竖屏 · 自动连播 · 免广告",
+                    "cangora",
                     color = PlusColors.SubText,
                     fontSize = 11.sp,
                     modifier = Modifier.padding(top = 2.dp)
