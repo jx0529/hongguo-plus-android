@@ -507,8 +507,15 @@ private suspend fun collectChecks(): List<CheckRow> {
         "「${detail.series.title}」共 ${detail.episodes.size} 集"
     }
 
-    step("⑤ 取流接口（自动换线）") {
+    var dash: SiteDash.Plan? = null
+
+    step("⑤ 取流接口（站点直连 → 自动换线）") {
         if (episodeId.isBlank()) error("没有拿到剧集 ID")
+        dash = runCatching { SiteDash.resolve(seriesId, episodeId, 1080) }.getOrNull()
+        if (dash != null) {
+            val plan = dash!!
+            return@step "站点直连命中：${plan.quality} ${plan.width}x${plan.height}，DASH 视频+音频（${plan.durationSeconds.toInt()} 秒）"
+        }
         val attemptsText = {
             Streams.lastAttempts.joinToString("；") { a ->
                 "${a.route}${if (a.ok) "成功" else "失败"}=${a.detail}"
@@ -524,6 +531,23 @@ private suspend fun collectChecks(): List<CheckRow> {
 
     step("⑥ 分段读取") {
         if (episodeId.isBlank()) error("没有拿到剧集 ID")
+        dash?.let { plan ->
+            val request = okhttp3.Request.Builder()
+                .url(plan.video)
+                .header("Range", "bytes=${plan.initVideo}")
+                .build()
+            Graph.http.newCall(request).execute().use { response ->
+                val bytes = response.body?.bytes()?.size ?: 0
+                if (bytes < 8) error("站点片源首段只读到 $bytes 字节")
+                val head = runCatching {
+                    Graph.http.newCall(
+                        okhttp3.Request.Builder().url(plan.audio)
+                            .header("Range", "bytes=${plan.initAudio}").build()
+                    ).execute().use { it.body?.bytes()?.size ?: 0 }
+                }.getOrDefault(0)
+                return@step "视频首段 $bytes 字节（HTTP ${response.code}），音频首段 $head 字节"
+            }
+        }
         Streams.cached(episodeId, 1080)
         val stream = try {
             Streams.resolve(episodeId, 1080)

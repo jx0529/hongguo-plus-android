@@ -94,6 +94,9 @@ import androidx.media3.common.MimeTypes
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
+import androidx.media3.exoplayer.source.MediaSource
+import androidx.media3.exoplayer.dash.DashMediaSource
+import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.hongguotv.core.RemoteVideo
@@ -133,6 +136,7 @@ fun PlayerScreen(
     var position by remember { mutableLongStateOf(0L) }
     var duration by remember { mutableLongStateOf(0L) }
     var isPlaying by remember { mutableStateOf(true) }
+    var routeHint by remember { mutableStateOf("") }
 
     val player = remember {
         ExoPlayer.Builder(context)
@@ -257,6 +261,35 @@ fun PlayerScreen(
         startLatency = -1
         val reusable = pool.remove(index)
             ?: PrewarmPool.take(episodeIds[index], quality)
+
+        // 站点直连（网页版那条 play-info 接口）优先：App 的 video_model 接口现在常回
+        // 200+空响应，这条线路不依赖设备注册签名，返回 DASH（视频/音频两路）
+        val dashPlan = if (reusable == null) {
+            withContext(Dispatchers.IO) {
+                runCatching { SiteDash.resolve(series.id, episodeIds[index], quality) }.getOrNull()
+            }
+        } else null
+
+        fun startWith(source: MediaSource) {
+            player.setMediaSource(source, true)
+            player.prepare()
+            player.setPlaybackSpeed(speed)
+            // 断点续看：同一集有记录就记下待跳转位置，等播放器 READY 再 seek
+            val (savedIndex, savedPosition) = Graph.library.progressOf(series.id)
+            pendingSeek = if (savedIndex == index && savedPosition > 3000L) savedPosition else 0L
+            player.playWhenReady = true
+            // loading 由首帧回调收起，避免"黑屏但没有任何提示"
+        }
+
+        if (dashPlan != null) {
+            routeHint = "站点直连 ${dashPlan.quality}"
+            startWith(
+                DashMediaSource.Factory(DefaultDataSource.Factory(context))
+                    .createMediaSource(MediaItem.fromUri(SiteDash.mpdUri(dashPlan)))
+            )
+            return@LaunchedEffect
+        }
+
         val result = if (reusable != null) {
             Result.success(reusable)
         } else {
@@ -270,6 +303,7 @@ fun PlayerScreen(
         result.onSuccess { video ->
             runCatching { remote?.close() }
             remote = video
+            routeHint = "App 接口"
             val source = ProgressiveMediaSource.Factory { VideoDataSource(video) }
                 .createMediaSource(
                     MediaItem.Builder()
@@ -277,14 +311,7 @@ fun PlayerScreen(
                         .setMimeType(MimeTypes.VIDEO_MP4)
                         .build()
                 )
-            player.setMediaSource(source, true)
-            player.prepare()
-            player.setPlaybackSpeed(speed)
-            // 断点续看：同一集有记录就记下待跳转位置，等播放器 READY 再 seek
-            val (savedIndex, savedPosition) = Graph.library.progressOf(series.id)
-            pendingSeek = if (savedIndex == index && savedPosition > 3000L) savedPosition else 0L
-            player.playWhenReady = true
-            // loading 由首帧回调收起，避免"黑屏但没有任何提示"
+            startWith(source)
         }.onFailure {
             loading = false
             error = it.message ?: "取流失败，稍后再试"
