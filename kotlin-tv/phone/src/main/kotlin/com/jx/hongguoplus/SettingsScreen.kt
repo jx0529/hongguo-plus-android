@@ -252,11 +252,13 @@ fun SettingsScreen(onBack: () -> Unit, onLogin: () -> Unit, onRefreshMine: () ->
                         updateError = null
                         scope.launch {
                             val result = withContext(Dispatchers.IO) {
-                                runCatching { Updater.check(version) }
+                                Updater.checkDetailed(version)
                             }
                             latest = result.getOrNull()
                             updateChecked = true
-                            result.exceptionOrNull()?.let { updateError = it.message ?: "检查更新失败" }
+                            result.exceptionOrNull()?.let {
+                                updateError = "更新服务器连不上：${it.message ?: "网络不可达"}"
+                            }
                             updateBusy = false
                         }
                     }
@@ -288,7 +290,11 @@ fun SettingsScreen(onBack: () -> Unit, onLogin: () -> Unit, onRefreshMine: () ->
                     }
                 }
                 Spacer(Modifier.height(10.dp))
-                Text("更新包来自 GitHub Releases，可直接覆盖安装，不会丢收藏与历史。", color = PlusColors.SubText, fontSize = 10.sp)
+                Text(
+                    if (updateChecked && latest == null && updateError == null) "已是最新版本（$version）"
+                    else "更新包经高速 CDN 分发，可直接覆盖安装，不会丢收藏与历史。",
+                    color = PlusColors.SubText, fontSize = 10.sp
+                )
             }
 
             Spacer(Modifier.height(28.dp))

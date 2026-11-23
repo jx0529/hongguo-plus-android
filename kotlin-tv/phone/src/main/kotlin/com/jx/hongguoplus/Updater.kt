@@ -36,8 +36,17 @@ object Updater {
     }
 
     /** 阻塞调用，请在 IO 线程执行。返回 null 表示已是最新或检查失败。 */
-    fun check(currentVersion: String): Release? =
-        runCatching { fetchFromCdn(currentVersion) ?: fetch(currentVersion) }.getOrNull()
+    fun check(currentVersion: String): Release? = checkDetailed(currentVersion).getOrNull()
+
+    /**
+     * 区分「已是最新」和「检查失败」：
+     * CDN 清单能读到就以其为准；读不到才回退 GitHub API，仍失败则抛出真实错误。
+     */
+    fun checkDetailed(currentVersion: String): Result<Release?> = runCatching {
+        val cdn = runCatching { fetchFromCdn(currentVersion) }
+        if (cdn.isSuccess) return@runCatching cdn.getOrNull()
+        fetch(currentVersion)
+    }
 
     /** 先从 CDN 上的更新清单取：一条小 JSON，国内基本不受墙影响。 */
     private fun fetchFromCdn(currentVersion: String): Release? {
