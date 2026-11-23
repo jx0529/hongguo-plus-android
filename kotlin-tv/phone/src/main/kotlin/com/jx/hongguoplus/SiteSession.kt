@@ -52,10 +52,15 @@ object SiteSession {
         return keys.any { raw.contains("$it=") }
     }
 
-    /** 取流用的 Cookie：先站点登录态，其次 App 账号里的那份。 */
+    /**
+     * 取流用的 Cookie：优先「扫码登录（电脑版）」拿到的站内会话（里面有 sessionid），
+     * 其次才是网页登录页那份。两者都是 hongguoduanju.com 的会话，前者更完整。
+     */
     fun playbackCookie(context: Context = Graph.appContext): String {
+        val account = runCatching { Graph.account.credentials()?.cookie.orEmpty() }.getOrDefault("")
+        if (looksLoggedIn(account)) return account
         val site = cookie(context)
         if (site.isNotBlank()) return site
-        return runCatching { Graph.account.credentials()?.cookie.orEmpty() }.getOrDefault("")
+        return account
     }
 }

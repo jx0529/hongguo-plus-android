@@ -118,7 +118,7 @@ fun WebSiteScreen(
         }
         if (capture) {
             Text(
-                "在下面的网页里用手机号登录红果（登录一次即可，之后自动记住）。登录成功后点右上角「保存登录」。",
+                "这里是电脑版网页：点右上角的「登录」用手机号或扫码登录红果（登录一次即可，之后自动记住）。登录成功后点上方「保存登录」。",
                 color = PlusColors.SubText, fontSize = 11.sp, lineHeight = 16.sp,
                 modifier = Modifier.padding(horizontal = 16.dp)
             )
@@ -137,9 +137,19 @@ fun WebSiteScreen(
                         settings.domStorageEnabled = true
                         settings.mediaPlaybackRequiresUserGesture = false
                         settings.loadsImagesAutomatically = true
-                        settings.userAgentString = settings.userAgentString
-                            ?.replace("; wv", "")
-                            ?.replace(" wv", "")
+                        settings.userAgentString = if (capture) {
+                            // 手机 UA 打开的是「下载 App」落地页，电脑版才有登录 / 扫码入口
+                            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
+                                "(KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
+                        } else {
+                            settings.userAgentString?.replace("; wv", "")?.replace(" wv", "")
+                        }
+                        if (capture) {
+                            settings.useWideViewPort = true
+                            settings.loadWithOverviewMode = true
+                            settings.builtInZoomControls = true
+                            settings.displayZoomControls = false
+                        }
                         CookieManager.getInstance().setAcceptCookie(true)
                         CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
                         webRef = this
